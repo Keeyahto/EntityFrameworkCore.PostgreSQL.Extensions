@@ -1,6 +1,6 @@
 # PGEXT-Production — первая самостоятельно используемая версия библиотеки
 
-This brief specifies a future production-admission target. It does not establish that the current PoC is accepted, package-ready, or published. Production work requires maintainer approval of the API and exact supported scope.
+This brief specifies the implementation and verification outcome for the approved first-production scope. Contract approval, source implementation, package admission and publication each require their own basis.
 
 The [first-production contract](production-contract.md) specifies the selected carrier, API/registration, supported/rejected shapes, mechanism limits and initial compatibility target. This brief retains the required implementation and verification outcome; design selection grants no implementation or package acceptance.
 
@@ -8,7 +8,7 @@ The [first-production contract](production-contract.md) specifies the selected c
 
 Принятый PoC GO либо явно утверждённый NARROW; точные Query carrier, supported/rejected shapes, registration и execution-time transaction contract. Для остальных mechanisms — proof native reuse/собственной реализации и current supported mappings. HOLD Query не даёт разрешения публиковать работающий locking API.
 
-The repository identity and Apache-2.0 license are established. Maintainers still need to confirm package identity and the release test matrix. Preserve third-party attribution; do not copy material incompatible with the public library boundary or remove required notices. Keep private application names, links, dependencies, data and credentials out of source, docs, tests, examples and release artifacts. Use neutral test models such as Record, Lease, Resource and Job.
+The repository identity and Apache-2.0 license are established. The first-production contract defines the initial test matrix. NuGet identity ownership and release authorization require confirmation before publication. Preserve third-party attribution; do not copy material incompatible with the public library boundary or remove required notices. Keep private application names, links, dependencies, data and credentials out of source, docs, tests, examples and release artifacts. Use neutral test models such as Record, Lease, Resource and Job.
 
 ## 2. Required outcome
 

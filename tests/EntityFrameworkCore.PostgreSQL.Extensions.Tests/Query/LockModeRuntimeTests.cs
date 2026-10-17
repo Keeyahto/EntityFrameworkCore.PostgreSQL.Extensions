@@ -13,27 +13,18 @@ namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Query;
 [Trait("Category", "PostgreSQL")]
 public sealed class LockModeRuntimeTests(PostgreSqlFixture fixture, ITestOutputHelper output)
 {
-    public static TheoryData<PocCarrier, LockStrength> AdditionalStrengths => new()
-    {
-        { PocCarrier.TableAnnotations, LockStrength.NoKeyUpdate },
-        { PocCarrier.TableAnnotations, LockStrength.KeyShare },
-        { PocCarrier.TranslatorTag, LockStrength.NoKeyUpdate },
-        { PocCarrier.TranslatorTag, LockStrength.KeyShare },
-        { PocCarrier.ExpressionTag, LockStrength.NoKeyUpdate },
-        { PocCarrier.ExpressionTag, LockStrength.KeyShare }
-    };
 
-    [Theory]
-    [MemberData(nameof(AdditionalStrengths))]
-    public async Task Additional_strengths_lock_the_target_and_preserve_native_sqlstate(
-        PocCarrier candidate,
+[Theory]
+[InlineData(LockStrength.NoKeyUpdate)]
+[InlineData(LockStrength.KeyShare)]
+public async Task Additional_strengths_lock_the_target_and_preserve_native_sqlstate(
         LockStrength strength)
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "target" });
 
         var observer = new SqlCommandObserver();
-        await using var holder = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var holder = QueryTestSupport.CreateContext(fixture, observer);
         await using var transaction = await holder.Database.BeginTransactionAsync();
         var selected = await holder.Rows.Where(row => row.Id == 1).WithRowLock(strength, LockWait.Wait).SingleAsync();
         Assert.Equal(1, selected.Id);
@@ -50,23 +41,22 @@ public sealed class LockModeRuntimeTests(PostgreSqlFixture fixture, ITestOutputH
         await otherTransaction.RollbackAsync();
         await transaction.RollbackAsync();
 
-        QueryTestSupport.WriteOutcome(output, $"Q03/Q-mode-{strength}", candidate, "supported-pass",
+        QueryTestSupport.WriteOutcome(output, $"Q03/Q-mode-{strength}", "supported-pass",
             $"executed={OneLine(observer.Commands.Single())};selectedIds={selected.Id};conflictSqlState={conflict.SqlState};release=rollback");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task No_wait_surfaces_postgresql_55P03_without_retry(PocCarrier candidate)
+    [Fact]
+    public async Task No_wait_surfaces_postgresql_55P03_without_retry()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "target" });
 
-        await using var holder = fixture.CreateContext(candidate);
+        await using var holder = fixture.CreateContext(enableExtensions: true);
         await using var holderTransaction = await holder.Database.BeginTransactionAsync();
         _ = await holder.Rows.Where(row => row.Id == 1).ForUpdate().SingleAsync();
 
         var observer = new SqlCommandObserver();
-        await using var contender = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var contender = QueryTestSupport.CreateContext(fixture, observer);
         await using var contenderTransaction = await contender.Database.BeginTransactionAsync();
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => contender.Rows
             .Where(row => row.Id == 1)
@@ -78,49 +68,46 @@ public sealed class LockModeRuntimeTests(PostgreSqlFixture fixture, ITestOutputH
         await contenderTransaction.RollbackAsync();
         await holderTransaction.CommitAsync();
 
-        QueryTestSupport.WriteOutcome(output, "Q01-NOWAIT", candidate, "supported-pass",
+        QueryTestSupport.WriteOutcome(output, "Q01-NOWAIT", "supported-pass",
             $"executed={OneLine(observer.Commands.Single())};providerWrapper={failure.GetType().Name};sqlState={nativeFailure.SqlState};retryCount=0;release=commit");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Skip_locked_returns_only_unlocked_rows(PocCarrier candidate)
+    [Fact]
+    public async Task Skip_locked_returns_only_unlocked_rows()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "held" },
             new ProbeRow { Id = 2, PeerId = 8, Rank = 20, Payload = "available" });
 
-        await using var holder = fixture.CreateContext(candidate);
+        await using var holder = fixture.CreateContext(enableExtensions: true);
         await using var holderTransaction = await holder.Database.BeginTransactionAsync();
         _ = await holder.Rows.Where(row => row.Id == 1).ForUpdate().SingleAsync();
 
         var observer = new SqlCommandObserver();
-        await using var worker = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var worker = QueryTestSupport.CreateContext(fixture, observer);
         await using var workerTransaction = await worker.Database.BeginTransactionAsync();
-        var selected = await worker.Rows.Where(row => row.Id <= 2).OrderBy(row => row.Id)
-            .ForUpdate(LockWait.SkipLocked).ToListAsync();
+        var selected = await worker.Rows.ForUpdate(LockWait.SkipLocked).ToListAsync();
 
-        Assert.Equal(new[] { 2 }, selected.Select(row => row.Id));
+        Assert.Equal(new[] { 2 }, selected.Select(row => row.Id).OrderBy(id => id));
         Assert.Contains("SKIP LOCKED", observer.Commands.Single(), StringComparison.Ordinal);
         await workerTransaction.CommitAsync();
         await holderTransaction.RollbackAsync();
-        QueryTestSupport.WriteOutcome(output, "Q04-SKIP-LOCKED", candidate, "supported-pass",
+        QueryTestSupport.WriteOutcome(output, "Q04-SKIP-LOCKED", "supported-pass",
             $"executed={OneLine(observer.Commands.Single())};selectedIds={string.Join(',', selected.Select(row => row.Id))};holderRollback=release");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Waiting_lock_cancellation_is_observed_in_postgresql_and_propagated(PocCarrier candidate)
+    [Fact]
+    public async Task Waiting_lock_cancellation_is_observed_in_postgresql_and_propagated()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "held" });
 
-        await using var holder = fixture.CreateContext(candidate);
+        await using var holder = fixture.CreateContext(enableExtensions: true);
         await using var holderTransaction = await holder.Database.BeginTransactionAsync();
         _ = await holder.Rows.Where(row => row.Id == 1).ForUpdate().SingleAsync();
 
         var observer = new SqlCommandObserver();
-        await using var waiting = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var waiting = QueryTestSupport.CreateContext(fixture, observer);
         var waitingTransaction = await waiting.Database.BeginTransactionAsync();
         var waitingBackendId = await BackendIdAsync(waiting.Database.GetDbConnection(), waitingTransaction.GetDbTransaction());
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(8));
@@ -154,31 +141,29 @@ public sealed class LockModeRuntimeTests(PostgreSqlFixture fixture, ITestOutputH
             || commandFailure is PostgresException { SqlState: PostgresErrorCodes.QueryCanceled },
             $"Expected a propagated cancellation, got {commandFailure?.GetType().Name}: {commandFailure?.Message}");
         Assert.Single(observer.Commands);
-        QueryTestSupport.WriteOutcome(output, "Q01-CANCEL-WAIT", candidate, "supported-pass",
+        QueryTestSupport.WriteOutcome(output, "Q01-CANCEL-WAIT", "supported-pass",
             $"executed={OneLine(observer.Commands.Single())};waitingBackendId={waitingBackendId};waitEventType={waitState};cancelled={commandFailure!.GetType().Name};rollback=release");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Query_built_before_transaction_fails_at_execution_without_issuing_select(PocCarrier candidate)
+    [Fact]
+    public async Task Query_built_before_transaction_fails_at_execution_without_issuing_select()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "no-tx" });
 
         var observer = new SqlCommandObserver();
-        await using var context = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var context = QueryTestSupport.CreateContext(fixture, observer);
         var query = context.Rows.Where(row => row.Id == 1).ForUpdate();
         var generatedSql = query.ToQueryString();
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => query.SingleAsync());
         Assert.StartsWith("The PostgreSQL row-lock request cannot be fulfilled:", failure.Message, StringComparison.Ordinal);
         Assert.Equal(0, observer.Count);
-        QueryTestSupport.WriteOutcome(output, "Q17-missing-transaction", candidate, "explicit-reject-as-designed",
+        QueryTestSupport.WriteOutcome(output, "Q17-missing-transaction", "explicit-reject-as-designed",
             $"generated={OneLine(generatedSql)};reason={failure.Message};issuedCommands={observer.Count}");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Borrowed_ef_transaction_is_accepted_and_owns_the_lock(PocCarrier candidate)
+    [Fact]
+    public async Task Borrowed_ef_transaction_is_accepted_and_owns_the_lock()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "borrowed" });
@@ -187,8 +172,8 @@ public sealed class LockModeRuntimeTests(PostgreSqlFixture fixture, ITestOutputH
         await connection.OpenAsync();
         await using var nativeTransaction = await connection.BeginTransactionAsync();
         var observer = new SqlCommandObserver();
-        var options = new DbContextOptionsBuilder<ProbeContext>().UsePocMatrixWarnings()
-            .UseNpgsql(connection, npgsql => npgsql.UsePostgreSqlExtensions(candidate))
+        var options = new DbContextOptionsBuilder<ProbeContext>().UseProviderTestWarnings()
+            .UseNpgsql(connection, npgsql => npgsql.UsePostgreSqlExtensions())
             .AddInterceptors(observer)
             .Options;
         await using var context = new ProbeContext(options);
@@ -205,7 +190,7 @@ public sealed class LockModeRuntimeTests(PostgreSqlFixture fixture, ITestOutputH
         await competitorTransaction.RollbackAsync();
         await nativeTransaction.CommitAsync();
 
-        QueryTestSupport.WriteOutcome(output, "Q17-borrowed-transaction", candidate, "supported-pass",
+        QueryTestSupport.WriteOutcome(output, "Q17-borrowed-transaction", "supported-pass",
             $"executed={OneLine(observer.Commands.Single())};selectedIds={selected.Id};targetNowait={conflict.SqlState};release=borrowed-commit");
     }
 

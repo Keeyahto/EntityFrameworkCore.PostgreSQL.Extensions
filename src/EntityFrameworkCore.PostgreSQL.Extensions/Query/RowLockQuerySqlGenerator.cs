@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.EntityFrameworkCore.Query.SqlExpressions;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -6,7 +7,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Query.Internal;
 
 namespace EntityFrameworkCore.PostgreSQL.Extensions;
 
-// EF1001 is scoped to this file because the carrier comparison must derive from the pinned Npgsql generator hooks.
+// EF1001 is scoped to this file because the implementation extends the pinned Npgsql generator hooks.
 #pragma warning disable EF1001
 internal sealed class RowLockQuerySqlGeneratorFactory : NpgsqlQuerySqlGeneratorFactory
 {
@@ -48,50 +49,75 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
     {
         base.GenerateLimitOffset(selectExpression);
 
-        var requests = selectExpression.Tags
+        var tags = selectExpression.Tags
             .Where(tag => tag.StartsWith(LockProtocol.TagPrefix, StringComparison.Ordinal))
             .ToArray();
-        if (requests.Length == 0)
+        if (tags.Length == 0)
         {
             return;
         }
 
-        if (requests.Length != 1 || !TryParse(requests[0], out var carrier, out var request))
+        if (tags.Length != 1
+            || !LockProtocol.TryParseIntent(tags[0][LockProtocol.TagPrefix.Length..], LockProtocol.TagPrefix, out var intent))
         {
-            throw RowLockQueryableMethodTranslatingExpressionVisitor.Rejected("the SELECT contains invalid or conflicting lock tags");
+            throw RowLockQueryErrors.Rejected("the SELECT contains invalid or conflicting lock intent tags");
         }
 
         if (selectExpression.IsDistinct
             || selectExpression.GroupBy.Count != 0
             || selectExpression.Having is not null
+            || selectExpression.Offset is not null
+            || selectExpression.Projection.Count == 0
             || selectExpression.Tables.Count != 1
-            || selectExpression.Tables[0] is not TableExpression target)
+            || selectExpression.Tables[0] is not TableExpression target
+            || string.IsNullOrEmpty(target.Alias)
+            || !string.Equals(target.Table.Name, intent.TableName, StringComparison.Ordinal)
+            || !string.Equals(target.Table.Schema, intent.Schema, StringComparison.Ordinal)
+            || target.Table.EntityTypeMappings.Count() != 1
+            || target.Table.EntityTypeMappings.Single().TypeBase.Name != intent.EntityTypeName)
         {
-            throw RowLockQueryableMethodTranslatingExpressionVisitor.Rejected(
-                "the final SELECT no longer identifies one simple root table occurrence");
+            throw RowLockQueryErrors.Rejected(
+                "the finalized SELECT must retain one exact mapped table occurrence and a stable lock scope");
         }
 
-        var annotation = target.FindAnnotation(LockProtocol.AnnotationName);
-        if ((carrier == PocCarrier.TableAnnotations
-                && (annotation?.Value is not LockRequest annotatedRequest || annotatedRequest != request))
-            || (carrier != PocCarrier.TableAnnotations && annotation is not null))
+        if (!LimitIsAdmitted(selectExpression.Limit, intent))
         {
-            throw RowLockQueryableMethodTranslatingExpressionVisitor.Rejected(
-                "the table occurrence carrier does not match the lock request");
+            throw RowLockQueryErrors.Rejected("the finalized SELECT does not preserve its exact Take(1) or approved terminal limit");
+        }
+
+        var treeGuard = new FinalSelectGuard(target.Alias);
+        foreach (var projection in selectExpression.Projection)
+        {
+            treeGuard.Visit(projection.Expression);
+        }
+
+        if (selectExpression.Predicate is not null)
+        {
+            treeGuard.Visit(selectExpression.Predicate);
+        }
+
+        foreach (var ordering in selectExpression.Orderings)
+        {
+            treeGuard.Visit(ordering.Expression);
+        }
+
+        if (selectExpression.Limit is not null)
+        {
+            treeGuard.Visit(selectExpression.Limit);
         }
 
         Sql.Append(" FOR ");
-        Sql.Append(request.Strength switch
+        Sql.Append(intent.Strength switch
         {
             LockStrength.Update => "UPDATE",
             LockStrength.NoKeyUpdate => "NO KEY UPDATE",
             LockStrength.Share => "SHARE",
             LockStrength.KeyShare => "KEY SHARE",
-            _ => throw RowLockQueryableMethodTranslatingExpressionVisitor.Rejected("the lock strength is invalid")
+            _ => throw RowLockQueryErrors.Rejected("the lock strength is invalid")
         });
         Sql.Append(" OF ");
         Sql.Append(Dependencies.SqlGenerationHelper.DelimitIdentifier(target.Alias));
-        switch (request.Wait)
+        switch (intent.Wait)
         {
             case LockWait.NoWait:
                 Sql.Append(" NOWAIT");
@@ -102,33 +128,79 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
             case LockWait.Wait:
                 break;
             default:
-                throw RowLockQueryableMethodTranslatingExpressionVisitor.Rejected("the lock wait mode is invalid");
+                throw RowLockQueryErrors.Rejected("the lock wait mode is invalid");
         }
 
         Sql.Append(" /*");
-        Sql.Append(request.Receipt(carrier));
+        Sql.Append(intent.Receipt);
         Sql.Append("*/");
     }
 
-    private static bool TryParse(string tag, out PocCarrier carrier, out LockRequest request)
+    private static bool LimitIsAdmitted(SqlExpression? limit, LockQueryIntent intent)
     {
-        carrier = default;
-        request = default;
-        var parts = tag[LockProtocol.TagPrefix.Length..].Split(':');
-        if (parts.Length != 3
-            || !int.TryParse(parts[0], out var carrierValue)
-            || !Enum.IsDefined((PocCarrier)carrierValue)
-            || !int.TryParse(parts[1], out var strengthValue)
-            || !Enum.IsDefined((LockStrength)strengthValue)
-            || !int.TryParse(parts[2], out var waitValue)
-            || !Enum.IsDefined((LockWait)waitValue))
+        if (!intent.HasTake)
+        {
+            return limit is null || IsIntegerConstant(limit, 1) || IsIntegerConstant(limit, 2);
+        }
+
+        if (limit is null)
         {
             return false;
         }
 
-        carrier = (PocCarrier)carrierValue;
-        request = new LockRequest((LockStrength)strengthValue, (LockWait)waitValue);
-        return true;
+        if (intent.TakeParameterName is not null)
+        {
+            if (limit is SqlParameterExpression parameter
+                && parameter.Name == intent.TakeParameterName)
+            {
+                return true;
+            }
+
+            return IsLeastWithTake(limit, expression => expression is SqlParameterExpression value
+                    && value.Name == intent.TakeParameterName,
+                expression => IsIntegerConstant(expression, 1) || IsIntegerConstant(expression, 2));
+        }
+
+        return IsIntegerConstant(limit, 1)
+            || IsLeastWithTake(limit,
+                expression => IsIntegerConstant(expression, 1),
+                expression => IsIntegerConstant(expression, 1) || IsIntegerConstant(expression, 2));
+    }
+
+    private static bool IsLeastWithTake(
+        SqlExpression expression,
+        Func<SqlExpression, bool> take,
+        Func<SqlExpression, bool> terminalLimit)
+        => expression is SqlFunctionExpression { Name: "LEAST", Arguments.Count: 2 } least
+            && (take(least.Arguments[0]) && terminalLimit(least.Arguments[1])
+                || take(least.Arguments[1]) && terminalLimit(least.Arguments[0]));
+
+    private static bool IsIntegerConstant(SqlExpression expression, int expected)
+        => expression is SqlConstantExpression { Value: int value } && value == expected;
+
+    private sealed class FinalSelectGuard : ExpressionVisitor
+    {
+        private readonly string _targetAlias;
+
+        public FinalSelectGuard(string targetAlias) => _targetAlias = targetAlias;
+
+        protected override Expression VisitExtension(Expression node)
+        {
+            if (node is SelectExpression
+                or ExistsExpression
+                or ScalarSubqueryExpression
+                || node is InExpression { Subquery: not null })
+            {
+                throw RowLockQueryErrors.Rejected("nested relational SELECT constructs are outside the final lock scope");
+            }
+
+            if (node is ColumnExpression column && column.TableAlias != _targetAlias)
+            {
+                throw RowLockQueryErrors.Rejected("the final SELECT contains a column outside its exact root table alias");
+            }
+
+            return base.VisitExtension(node);
+        }
     }
 }
 #pragma warning restore EF1001

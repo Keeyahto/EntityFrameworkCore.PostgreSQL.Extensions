@@ -16,15 +16,14 @@ public sealed class SortKeyConcurrencyTests(PostgreSqlFixture fixture, ITestOutp
 {
     private const string NativeOrderedLockSql = "SELECT \"Id\", \"PeerId\", \"Rank\", \"Payload\" FROM \"Rows\" ORDER BY \"Rank\" LIMIT 1 FOR UPDATE";
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task P36_read_committed_order_by_take_wait_returns_originally_selected_row(PocCarrier candidate)
+    [Fact]
+    public async Task P36_read_committed_order_by_take_wait_returns_originally_selected_row()
     {
-        await RunScenarioAsync(candidate, useNativeControl: true);
-        await RunScenarioAsync(candidate, useNativeControl: false);
+        await RunScenarioAsync( useNativeControl: true);
+        await RunScenarioAsync( useNativeControl: false);
     }
 
-    private async Task RunScenarioAsync(PocCarrier candidate, bool useNativeControl)
+    private async Task RunScenarioAsync(bool useNativeControl)
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "original-sort-first" },
@@ -38,7 +37,7 @@ public sealed class SortKeyConcurrencyTests(PostgreSqlFixture fixture, ITestOutp
         await LockRowAsync(holder.Database.GetDbConnection(), holderTransaction.GetDbTransaction(), 1, cancellationToken);
         var holderBackend = await BackendIdAsync(holder.Database.GetDbConnection(), holderTransaction.GetDbTransaction(), cancellationToken);
 
-        await using var waiter = QueryTestSupport.CreateContext(fixture, useNativeControl ? null : candidate, observer);
+        await using var waiter = QueryTestSupport.CreateContext(fixture, observer);
         await using var waiterTransaction = await waiter.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         var waiterBackend = await BackendIdAsync(waiter.Database.GetDbConnection(), waiterTransaction.GetDbTransaction(), cancellationToken);
         Assert.NotEqual(holderBackend, waiterBackend);
@@ -97,7 +96,7 @@ public sealed class SortKeyConcurrencyTests(PostgreSqlFixture fixture, ITestOutp
             if (useNativeControl)
             {
                 Assert.Equal(NativeOrderedLockSql, OneLine(generatedSql));
-                QueryTestSupport.WriteOutcome(output, "P3.6-sort-key-native", candidate, "native-control-pass",
+                QueryTestSupport.WriteOutcome(output, "P3.6-sort-key-native", "native-control-pass",
                     $"sql={OneLine(generatedSql)};executed={OneLine(NativeOrderedLockSql)};backendIds={holderBackend},{waiterBackend},{competitorBackend};waitEvent={waitEvent};returnedId={selected.Id};returnedRank={selected.Rank};nonTargetNowait=pass;targetNowait={targetConflict.SqlState};waiterRelease=rollback;orderingAfterWait=not-asserted-beyond-native-observed-row");
             }
             else
@@ -106,7 +105,7 @@ public sealed class SortKeyConcurrencyTests(PostgreSqlFixture fixture, ITestOutp
                 Assert.Contains("ORDER BY", executedSql, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("LIMIT", executedSql, StringComparison.OrdinalIgnoreCase);
                 Assert.Contains("FOR UPDATE OF", executedSql, StringComparison.Ordinal);
-                QueryTestSupport.WriteOutcome(output, "P3.6-sort-key-generated", candidate, "supported-pass",
+                QueryTestSupport.WriteOutcome(output, "P3.6-sort-key-generated", "supported-pass",
                     $"generated={OneLine(generatedSql)};executed={OneLine(executedSql)};backendIds={holderBackend},{waiterBackend},{competitorBackend};waitEvent={waitEvent};returnedId={selected.Id};returnedRank={selected.Rank};nonTargetNowait=pass;targetNowait={targetConflict.SqlState};waiterRelease=rollback;orderingAfterWait=not-asserted-beyond-native-observed-row");
             }
 

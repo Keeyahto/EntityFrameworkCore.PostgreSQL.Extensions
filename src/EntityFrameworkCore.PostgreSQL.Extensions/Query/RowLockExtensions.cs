@@ -8,20 +8,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 
 namespace EntityFrameworkCore.PostgreSQL.Extensions;
 
-/// <summary>Experimental query-carrier implementations compared by the PostgreSQL extensions PoC.</summary>
-public enum PocCarrier
-{
-    /// <summary>Translates the lock marker and stores intent on the exact root table occurrence.</summary>
-    TableAnnotations,
-
-    /// <summary>Translates the lock marker and carries intent through a reserved query tag.</summary>
-    TranslatorTag,
-
-    /// <summary>Rewrites the lock marker to a reserved query tag before query translation.</summary>
-    ExpressionTag
-}
-
-/// <summary>PostgreSQL row-lock strengths exposed by the experimental query PoC.</summary>
+/// <summary>PostgreSQL row-lock strengths supported by the row-lock query extensions.</summary>
 public enum LockStrength
 {
     /// <summary>Acquire a FOR UPDATE lock.</summary>
@@ -50,7 +37,7 @@ public enum LockWait
     SkipLocked
 }
 
-/// <summary>Experimental PostgreSQL row-locking query extensions. This API is part of a carrier PoC.</summary>
+/// <summary>PostgreSQL row-locking query extensions for one directly mapped root entity table.</summary>
 public static class RowLockExtensions
 {
     private static readonly MethodInfo ForUpdateMethod = GetMethod(nameof(ForUpdate), 0);
@@ -158,40 +145,135 @@ public static class RowLockExtensions
 
 internal readonly record struct LockRequest(LockStrength Strength, LockWait Wait)
 {
-    public string Tag(PocCarrier carrier) => $"{LockProtocol.TagPrefix}{(int)carrier}:{(int)Strength}:{(int)Wait}";
-    public string Receipt(PocCarrier carrier) => $"{LockProtocol.ReceiptPrefix}{(int)carrier}:{(int)Strength}:{(int)Wait}";
+}
+
+internal sealed record LockQueryIntent(
+    LockStrength Strength,
+    LockWait Wait,
+    string EntityTypeName,
+    string TableName,
+    string? Schema,
+    string? TakeParameterName,
+    bool HasTake)
+{
+    public string Tag => LockProtocol.Format(LockProtocol.TagPrefix, this);
+    public string Receipt => LockProtocol.Format(LockProtocol.ReceiptPrefix, this);
 }
 
 internal static class LockProtocol
 {
     public const string TagPrefix = "__pgext_lock_v1:";
     public const string ReceiptPrefix = "__pgext_lock_fulfilled_v1:";
-    public const string AnnotationName = "EntityFrameworkCore.PostgreSQL.Extensions.RowLock.V1";
 
     public static bool ContainsReservedProtocolText(string value)
         => value.Contains(TagPrefix, StringComparison.Ordinal)
             || value.Contains(ReceiptPrefix, StringComparison.Ordinal);
+
+    public static string Format(string prefix, LockQueryIntent request)
+    {
+        var take = request.TakeParameterName is null
+            ? "-"
+            : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.TakeParameterName))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var table = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.TableName))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var entity = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.EntityTypeName))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        var schema = request.Schema is null
+            ? "-"
+            : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.Schema))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        return $"{prefix}{(int)request.Strength}:{(int)request.Wait}:{(request.HasTake ? 1 : 0)}:{take}:{entity}:{table}:{schema}";
+    }
+
+    public static bool TryParseIntent(string text, string prefix, out LockQueryIntent intent)
+    {
+        intent = null!;
+        var parts = text.Split(':');
+        if (parts.Length != 7
+            || !int.TryParse(parts[0], out var strengthValue)
+            || !Enum.IsDefined((LockStrength)strengthValue)
+            || !int.TryParse(parts[1], out var waitValue)
+            || !Enum.IsDefined((LockWait)waitValue)
+            || parts[2] is not ("0" or "1")
+            || parts[2] == "0" && parts[3] != "-"
+            || !TryDecode(parts[4], out var entityTypeName)
+            || entityTypeName.Length == 0
+            || !TryDecode(parts[5], out var tableName)
+            || tableName.Length == 0)
+        {
+            return false;
+        }
+
+        string? takeParameterName = null;
+        if (parts[3] != "-")
+        {
+            if (!TryDecode(parts[3], out takeParameterName) || string.IsNullOrEmpty(takeParameterName))
+            {
+                return false;
+            }
+        }
+
+        string? schema = null;
+        if (parts[6] != "-" && !TryDecode(parts[6], out schema))
+        {
+            return false;
+        }
+
+        intent = new LockQueryIntent(
+            (LockStrength)strengthValue,
+            (LockWait)waitValue,
+            entityTypeName,
+            tableName,
+            schema,
+            takeParameterName,
+            parts[2] == "1");
+        return Format(prefix, intent) == prefix + text;
+    }
+
+    private static bool TryDecode(string value, out string decoded)
+    {
+        try
+        {
+            var base64 = value.Replace('-', '+').Replace('_', '/');
+            base64 += new string('=', (4 - base64.Length % 4) % 4);
+            decoded = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(base64));
+            return true;
+        }
+        catch (FormatException)
+        {
+            decoded = string.Empty;
+            return false;
+        }
+    }
 }
 
-/// <summary>Registers one experimental row-lock carrier for the selected context options.</summary>
+/// <summary>Registers PostgreSQL row-lock query support for the selected context options.</summary>
 public static class PostgreSqlExtensionsOptionsBuilderExtensions
 {
-    /// <summary>Enables an experimental row-lock query carrier for this Npgsql context.</summary>
-    public static NpgsqlDbContextOptionsBuilder UsePostgreSqlExtensions(
-        this NpgsqlDbContextOptionsBuilder optionsBuilder,
-        PocCarrier carrier)
+    /// <summary>Enables PostgreSQL row-lock query support for this Npgsql context.</summary>
+    public static NpgsqlDbContextOptionsBuilder UsePostgreSqlExtensions(this NpgsqlDbContextOptionsBuilder optionsBuilder)
     {
         ArgumentNullException.ThrowIfNull(optionsBuilder);
-        if (!Enum.IsDefined(carrier))
-        {
-            throw new ArgumentOutOfRangeException(nameof(carrier));
-        }
 
         var builder = ((IRelationalDbContextOptionsBuilderInfrastructure)optionsBuilder).OptionsBuilder;
         var existing = builder.Options.FindExtension<RowLockOptionsExtension>();
-        if (existing is not null && existing.Carrier != carrier)
+        var replacements = builder.Options.FindExtension<CoreOptionsExtension>()?.ReplacedServices;
+        var conflictingReplacement = replacements?.FirstOrDefault(replacement =>
+            replacement.Key.Item1 == typeof(IQueryableMethodTranslatingExpressionVisitorFactory)
+            || replacement.Key.Item1 == typeof(IQuerySqlGeneratorFactory)
+                && (existing is null || replacement.Value != typeof(RowLockQuerySqlGeneratorFactory)));
+        var conflictingService = conflictingReplacement?.Key.Item1;
+        if (conflictingService is not null)
         {
-            throw new InvalidOperationException("Conflicting PostgreSQL extension query carriers were configured for one context.");
+            throw new InvalidOperationException(
+                $"Cannot configure PostgreSQL row-lock support because '{conflictingService.FullName}' already has a competing service replacement.");
+        }
+
+        if (builder.Options.FindExtension<CoreOptionsExtension>()?.InternalServiceProvider is not null)
+        {
+            throw new InvalidOperationException(
+                "PostgreSQL row-lock support does not support manually configured EF internal service providers.");
         }
 
         if (existing is not null)
@@ -199,42 +281,20 @@ public static class PostgreSqlExtensionsOptionsBuilderExtensions
             return optionsBuilder;
         }
 
-        var priorQueryServiceReplacement = builder.Options.FindExtension<CoreOptionsExtension>()?
-            .ReplacedServices?.Keys
-            .Select(replacement => replacement.Item1)
-            .FirstOrDefault(serviceType => serviceType == typeof(IQuerySqlGeneratorFactory)
-                || serviceType == typeof(IQueryableMethodTranslatingExpressionVisitorFactory));
-        if (priorQueryServiceReplacement is not null)
-        {
-            throw new InvalidOperationException(
-                $"Cannot configure the PostgreSQL row-lock carrier because '{priorQueryServiceReplacement.FullName}' already has a service replacement.");
-        }
-
-        ((IDbContextOptionsBuilderInfrastructure)builder).AddOrUpdateExtension(new RowLockOptionsExtension(carrier));
+        ((IDbContextOptionsBuilderInfrastructure)builder).AddOrUpdateExtension(new RowLockOptionsExtension());
         builder.ReplaceService<IQuerySqlGeneratorFactory, RowLockQuerySqlGeneratorFactory>();
-        if (carrier == PocCarrier.TableAnnotations)
-        {
-            builder.ReplaceService<IQueryableMethodTranslatingExpressionVisitorFactory, AnnotationLockQueryVisitorFactory>();
-        }
-        else if (carrier == PocCarrier.TranslatorTag)
-        {
-            builder.ReplaceService<IQueryableMethodTranslatingExpressionVisitorFactory, TagLockQueryVisitorFactory>();
-        }
-
-        builder.AddInterceptors(RowLockQueryInterceptor.For(carrier));
+        builder.AddInterceptors(RowLockQueryInterceptor.Instance);
         return optionsBuilder;
     }
 }
 
 internal sealed class RowLockOptionsExtension : IDbContextOptionsExtension
 {
-    public RowLockOptionsExtension(PocCarrier carrier)
+    public RowLockOptionsExtension()
     {
-        Carrier = carrier;
         Info = new ExtensionInfo(this);
     }
 
-    public PocCarrier Carrier { get; }
     public DbContextOptionsExtensionInfo Info { get; }
 
     public void ApplyServices(IServiceCollection services)
@@ -243,20 +303,25 @@ internal sealed class RowLockOptionsExtension : IDbContextOptionsExtension
 
     public void Validate(IDbContextOptions options)
     {
+        if (options.FindExtension<CoreOptionsExtension>()?.InternalServiceProvider is not null)
+        {
+            throw new InvalidOperationException(
+                "PostgreSQL row-lock support does not support manually configured EF internal service providers.");
+        }
     }
 
     private sealed class ExtensionInfo : DbContextOptionsExtensionInfo
     {
-        private readonly RowLockOptionsExtension _extension;
-
-        public ExtensionInfo(RowLockOptionsExtension extension) : base(extension) => _extension = extension;
+        public ExtensionInfo(RowLockOptionsExtension extension) : base(extension)
+        {
+        }
 
         public override bool IsDatabaseProvider => false;
-        public override string LogFragment => $"RowLockCarrier={_extension.Carrier} ";
-        public override int GetServiceProviderHashCode() => (int)_extension.Carrier;
+        public override string LogFragment => "PostgreSqlExtensionsRowLock ";
+        public override int GetServiceProviderHashCode() => 1;
         public override bool ShouldUseSameServiceProvider(DbContextOptionsExtensionInfo other)
-            => other is ExtensionInfo info && info._extension.Carrier == _extension.Carrier;
+            => other is ExtensionInfo;
         public override void PopulateDebugInfo(IDictionary<string, string> debugInfo)
-            => debugInfo["EntityFrameworkCore.PostgreSQL.Extensions:RowLockCarrier"] = _extension.Carrier.ToString();
+            => debugInfo["EntityFrameworkCore.PostgreSQL.Extensions:RowLock"] = "C";
     }
 }

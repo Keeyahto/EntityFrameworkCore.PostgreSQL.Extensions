@@ -1,6 +1,7 @@
 using System.Data;
 using System.Data.Common;
 using System.Linq.Expressions;
+using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -34,10 +35,12 @@ public static class InsertIgnoreExtensions
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(conflictTarget);
 
-        if (!string.Equals(context.Database.ProviderName, "Npgsql.EntityFrameworkCore.PostgreSQL", StringComparison.Ordinal))
-        {
-            throw new NotSupportedException("InsertIgnoreAsync requires the Npgsql EF Core provider.");
-        }
+        var connection = PostgreSqlCommandGuard.GetConnection(context.Database, nameof(InsertIgnoreAsync));
+        var currentTransaction = PostgreSqlCommandGuard.GetCurrentTransaction(
+            context.Database,
+            connection,
+            nameof(InsertIgnoreAsync),
+            required: false);
 
         var entityType = context.Model.FindEntityType(typeof(TEntity))
             ?? throw new NotSupportedException($"Entity type {typeof(TEntity).Name} is not part of this EF model.");
@@ -65,30 +68,25 @@ public static class InsertIgnoreExtensions
             ? $"INSERT INTO {tableSql} DEFAULT VALUES ON CONFLICT ({conflictSql}) DO NOTHING"
             : $"INSERT INTO {tableSql}{columnSql}{parameterSql} ON CONFLICT ({conflictSql}) DO NOTHING";
 
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Transaction = currentTransaction;
+        for (var index = 0; index < values.Count; index++)
+        {
+            var value = values[index];
+            var typeMapping = value.Property.GetRelationalTypeMapping();
+            DbParameter parameter = typeMapping.CreateParameter(
+                command,
+                $"p{index}",
+                value.Value,
+                value.Property.IsNullable,
+                ParameterDirection.Input);
+            command.Parameters.Add(parameter);
+        }
+
         await context.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var connection = context.Database.GetDbConnection();
-            await using var command = connection.CreateCommand();
-            command.CommandText = sql;
-            if (context.Database.CurrentTransaction is { } currentTransaction)
-            {
-                command.Transaction = currentTransaction.GetDbTransaction();
-            }
-
-            for (var index = 0; index < values.Count; index++)
-            {
-                var value = values[index];
-                var typeMapping = value.Property.GetRelationalTypeMapping();
-                DbParameter parameter = typeMapping.CreateParameter(
-                    command,
-                    $"p{index}",
-                    value.Value,
-                    value.Property.IsNullable,
-                    ParameterDirection.Input);
-                command.Parameters.Add(parameter);
-            }
-
             var affected = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             return affected switch
             {
@@ -105,6 +103,11 @@ public static class InsertIgnoreExtensions
 
     private static TableMapping ResolveMapping(IEntityType entityType)
     {
+        if (entityType.FindOwnership() is not null)
+        {
+            throw new NotSupportedException("InsertIgnoreAsync does not support owned entity mappings.");
+        }
+
         if (entityType.BaseType is not null || entityType.GetDerivedTypes().Any())
         {
             throw new NotSupportedException("InsertIgnoreAsync does not support entity inheritance mappings.");
@@ -115,7 +118,8 @@ public static class InsertIgnoreExtensions
             throw new NotSupportedException("InsertIgnoreAsync does not support complex-property mappings.");
         }
 
-        if (entityType.GetMappingFragments(StoreObjectType.Table).Any())
+        if (entityType.GetMappingFragments(StoreObjectType.Table).Any()
+            || entityType.GetMappingFragments(StoreObjectType.View).Any())
         {
             throw new NotSupportedException("InsertIgnoreAsync requires one table mapping without table fragments.");
         }
@@ -126,12 +130,20 @@ public static class InsertIgnoreExtensions
         }
 
         var table = entityType.GetTableName();
-        if (table is null || entityType.GetViewName() is not null)
+        if (table is null || entityType.GetViewName() is not null || entityType.GetViewSchema() is not null)
         {
             throw new NotSupportedException("InsertIgnoreAsync requires one mapped table.");
         }
 
         var schema = entityType.GetSchema();
+        if (entityType.Model.GetEntityTypes().Any(other =>
+                !ReferenceEquals(other, entityType)
+                && string.Equals(other.GetTableName(), table, StringComparison.Ordinal)
+                && string.Equals(other.GetSchema(), schema, StringComparison.Ordinal)))
+        {
+            throw new NotSupportedException("InsertIgnoreAsync does not support entity types that share a table mapping.");
+        }
+
         return new TableMapping(table, schema, StoreObjectIdentifier.Table(table, schema));
     }
 
@@ -143,8 +155,11 @@ public static class InsertIgnoreExtensions
         var members = body switch
         {
             MemberExpression member => new[] { member },
-            NewExpression creation => creation.Arguments.Select(argument => StripConvert(argument) as MemberExpression
-                ?? throw new NotSupportedException("Conflict targets must select mapped entity properties directly.")).ToArray(),
+            NewExpression creation when IsAnonymousType(creation.Type)
+                && creation.Members is { Count: > 0 } selectedMembers
+                && selectedMembers.Count == creation.Arguments.Count
+                => creation.Arguments.Select(argument => StripConvert(argument) as MemberExpression
+                    ?? throw new NotSupportedException("Conflict targets must select mapped entity properties directly.")).ToArray(),
             _ => throw new NotSupportedException("Conflict targets must select one property or an anonymous composite key.")
         };
 
@@ -182,17 +197,19 @@ public static class InsertIgnoreExtensions
         var keyMatches = entityType.GetKeys().Any(key => SameProperties(key.Properties, targetProperties));
         var indexMatches = entityType.GetIndexes().Any(index =>
             index.IsUnique
+            && index.FindAnnotation("Npgsql:IndexExpression") is null
             && index.GetFilter(storeObject) is null
             && SameProperties(index.Properties, targetProperties));
         if (!keyMatches && !indexMatches)
         {
             var filteredMatch = entityType.GetIndexes().Any(index =>
                 index.IsUnique
+                && index.FindAnnotation("Npgsql:IndexExpression") is null
                 && index.GetFilter(storeObject) is not null
                 && SameProperties(index.Properties, targetProperties));
             throw new NotSupportedException(filteredMatch
                 ? "Partial unique indexes are not supported as insert-ignore conflict targets."
-                : "The selected properties are not a mapped unfiltered unique key.");
+                : "The selected properties are not a mapped unfiltered unique key; expression indexes are not supported.");
         }
     }
 
@@ -266,6 +283,11 @@ public static class InsertIgnoreExtensions
 
     private static bool SameProperties(IReadOnlyList<IProperty> left, IReadOnlyList<IProperty> right)
         => left.Count == right.Count && left.All(right.Contains);
+
+    private static bool IsAnonymousType(Type type)
+        => type.IsDefined(typeof(CompilerGeneratedAttribute), inherit: false)
+            && type.IsGenericType
+            && type.Name.Contains("AnonymousType", StringComparison.Ordinal);
 
     private static string QuoteIdentifier(string identifier)
         => new NpgsqlCommandBuilder().QuoteIdentifier(identifier);

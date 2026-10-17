@@ -1,6 +1,6 @@
 # EntityFrameworkCore.PostgreSQL.Extensions — экспериментальный план перед freeze API
 
-The repository contains experimental implementations of the mechanisms and one test project. Bounded local PostgreSQL checks exercise selected row-lock, advisory-lock, DML, clock, and capability-probe behavior. The query carrier and public API scope remain experimental pending maintainer review; arbitrary unmarked-predicate subqueries and global query filters are uncharacterized. These pilots define proof and admission criteria; detailed run results belong with change evidence.
+These pilots define the bounded pre-selection research scope. The [first-production contract](briefs/production-contract.md) owns the selected API, supported shapes and admission requirements. Use [internal mechanisms](internal-mechanisms.md), [query integration](query-integration.md) and [compatibility](compatibility.md) for current contracts and implementation limits; pilot alternatives grant no additional support.
 
 ## PILOT-00 — Repo bootstrap, package smoke
 

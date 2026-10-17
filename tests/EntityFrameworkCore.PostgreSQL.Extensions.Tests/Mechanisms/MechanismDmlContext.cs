@@ -14,6 +14,11 @@ internal sealed class MechanismDmlContext(DbContextOptions<MechanismDmlContext> 
     public DbSet<PartialUniqueRow> PartialUnique => Set<PartialUniqueRow>();
     public DbSet<ShadowValueRow> ShadowValues => Set<ShadowValueRow>();
     public DbSet<SplitRow> SplitRows => Set<SplitRow>();
+    public DbSet<NullableDefaultRow> NullableDefaults => Set<NullableDefaultRow>();
+    public DbSet<IdentityAlwaysRow> IdentityAlways => Set<IdentityAlwaysRow>();
+    public DbSet<ClientGeneratedRow> ClientGenerated => Set<ClientGeneratedRow>();
+    public DbSet<ThrowingConvertedRow> ThrowingConverted => Set<ThrowingConvertedRow>();
+    public DbSet<OwnedHostRow> OwnedHosts => Set<OwnedHostRow>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -88,6 +93,50 @@ internal sealed class MechanismDmlContext(DbContextOptions<MechanismDmlContext> 
             entity.Property(row => row.Id).UseIdentityByDefaultColumn();
             entity.HasIndex(row => row.Key).IsUnique();
         });
+
+        modelBuilder.Entity<NullableDefaultRow>(entity =>
+        {
+            entity.ToTable("NullableDefaults", "mechanisms");
+            entity.HasKey(row => row.Id);
+            entity.Property(row => row.Id).UseIdentityByDefaultColumn();
+            entity.Property(row => row.Value).HasDefaultValueSql("'database-default'").HasSentinel("use-database-default");
+            entity.HasIndex(row => row.UniqueKey).IsUnique();
+        });
+
+        modelBuilder.Entity<IdentityAlwaysRow>(entity =>
+        {
+            entity.ToTable("IdentityAlways", "mechanisms");
+            entity.HasKey(row => row.Id);
+            entity.Property(row => row.Id).UseIdentityAlwaysColumn();
+            entity.HasIndex(row => row.UniqueKey).IsUnique();
+        });
+
+        modelBuilder.Entity<ClientGeneratedRow>(entity =>
+        {
+            entity.ToTable("ClientGenerated", "mechanisms");
+            entity.HasKey(row => row.Id);
+            entity.Property(row => row.Id).ValueGeneratedOnAdd();
+            entity.HasIndex(row => row.UniqueKey).IsUnique();
+        });
+
+        modelBuilder.Entity<ThrowingConvertedRow>(entity =>
+        {
+            entity.ToTable("ThrowingConverted", "mechanisms");
+            entity.HasKey(row => row.Id);
+            entity.Property(row => row.Id).UseIdentityByDefaultColumn();
+            entity.Property(row => row.Key).HasConversion(
+                key => ThrowingKeyConverter.ToProvider(key),
+                value => new ThrowingKey(value));
+            entity.HasIndex(row => row.Key).IsUnique();
+        });
+
+        modelBuilder.Entity<OwnedHostRow>(entity =>
+        {
+            entity.ToTable("OwnedHosts", "mechanisms");
+            entity.HasKey(row => row.Id);
+            entity.Property(row => row.Id).UseIdentityByDefaultColumn();
+            entity.OwnsOne(row => row.Details, owned => owned.ToTable("OwnedHosts", "mechanisms"));
+        });
     }
 }
 
@@ -97,14 +146,14 @@ internal static class MechanismDmlDatabase
     private static bool _created;
 
     public static MechanismDmlContext CreateContext(string connectionString)
-        => new(new DbContextOptionsBuilder<MechanismDmlContext>().UsePocMatrixWarnings().UseNpgsql(connectionString).Options);
+        => new(new DbContextOptionsBuilder<MechanismDmlContext>().UseProviderTestWarnings().UseNpgsql(connectionString).Options);
 
     public static async Task ResetAsync(string connectionString)
     {
         await EnsureSchemaScriptAppliedAsync(connectionString);
         await using var context = CreateContext(connectionString);
         await context.Database.ExecuteSqlRawAsync(
-            "TRUNCATE TABLE mechanisms.\"IdentityDefaults\", mechanisms.\"CompositeUnique\", mechanisms.\"ConvertedUnique\", mechanisms.\"NullableUnique\", mechanisms.\"SecondaryUnique\", mechanisms.\"PartialUnique\", mechanisms.\"ShadowValues\", mechanisms.\"SplitRows\", mechanisms.\"SplitRowDetails\" RESTART IDENTITY");
+            "TRUNCATE TABLE mechanisms.\"IdentityDefaults\", mechanisms.\"CompositeUnique\", mechanisms.\"ConvertedUnique\", mechanisms.\"NullableUnique\", mechanisms.\"SecondaryUnique\", mechanisms.\"PartialUnique\", mechanisms.\"ShadowValues\", mechanisms.\"SplitRows\", mechanisms.\"SplitRowDetails\", mechanisms.\"NullableDefaults\", mechanisms.\"IdentityAlways\", mechanisms.\"ClientGenerated\", mechanisms.\"ThrowingConverted\", mechanisms.\"OwnedHosts\" RESTART IDENTITY");
     }
 
     public static async Task EnsureSchemaScriptAppliedAsync(string connectionString)
@@ -201,4 +250,47 @@ internal sealed class SplitRow
     public int Id { get; set; }
     public string Key { get; set; } = string.Empty;
     public string Detail { get; set; } = string.Empty;
+}
+
+internal sealed class NullableDefaultRow
+{
+    public int Id { get; set; }
+    public string UniqueKey { get; set; } = string.Empty;
+    public string? Value { get; set; } = "use-database-default";
+}
+
+internal sealed class IdentityAlwaysRow
+{
+    public int Id { get; set; }
+    public string UniqueKey { get; set; } = string.Empty;
+}
+
+internal sealed class ClientGeneratedRow
+{
+    public Guid Id { get; set; }
+    public string UniqueKey { get; set; } = string.Empty;
+}
+
+internal sealed class ThrowingConvertedRow
+{
+    public int Id { get; set; }
+    public ThrowingKey Key { get; set; } = new("conversion-fails");
+}
+
+internal sealed record ThrowingKey(string Value);
+
+internal static class ThrowingKeyConverter
+{
+    public static string ToProvider(ThrowingKey key) => throw new InvalidOperationException("forced value-converter failure");
+}
+
+internal sealed class OwnedHostRow
+{
+    public int Id { get; set; }
+    public OwnedMechanismDetails Details { get; set; } = new();
+}
+
+internal sealed class OwnedMechanismDetails
+{
+    public string Value { get; set; } = string.Empty;
 }

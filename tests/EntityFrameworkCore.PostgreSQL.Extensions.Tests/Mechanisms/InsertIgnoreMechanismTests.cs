@@ -8,6 +8,8 @@ using Xunit;
 namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Mechanisms;
 
 [Collection(PostgreSqlCollection.Name)]
+[Trait("Category", "PostgreSQL")]
+[Trait("MechanismTestCategory", "PostgreSQL")]
 public sealed class InsertIgnoreMechanismTests(PostgreSqlFixture fixture)
 {
     [Fact]
@@ -30,10 +32,22 @@ public sealed class InsertIgnoreMechanismTests(PostgreSqlFixture fixture)
         Assert.True(await context.InsertIgnoreAsync(explicitIdentity, row => row.UniqueKey));
         Assert.Empty(context.ChangeTracker.Entries());
 
-        var rows = await context.IdentityDefaults.ToDictionaryAsync(row => row.UniqueKey);
-        Assert.Equal(2, rows.Count);
+        var tracked = await context.IdentityDefaults.SingleAsync(row => row.UniqueKey == "generated");
+        tracked.Payload = "unsaved-tracker-value";
+        var trackedEntry = context.Entry(tracked);
+        Assert.Equal(EntityState.Modified, trackedEntry.State);
+        Assert.True(await context.InsertIgnoreAsync(
+            new IdentityDefaultRow { UniqueKey = "third", Payload = "independent-insert" },
+            row => row.UniqueKey));
+        Assert.Equal(EntityState.Modified, trackedEntry.State);
+        Assert.Equal("unsaved-tracker-value", tracked.Payload);
+        Assert.Equal(EntityState.Detached, context.Entry(explicitIdentity).State);
+
+        var rows = await context.IdentityDefaults.AsNoTracking().ToDictionaryAsync(row => row.UniqueKey);
+        Assert.Equal(3, rows.Count);
         Assert.True(rows["generated"].Id > 0);
         Assert.NotEqual(default, rows["generated"].CreatedAt);
+        Assert.Equal("one", rows["generated"].Payload);
         Assert.Equal(7001, rows["explicit"].Id);
         Assert.Equal(explicitCreatedAt, rows["explicit"].CreatedAt);
     }
@@ -165,4 +179,102 @@ public sealed class InsertIgnoreMechanismTests(PostgreSqlFixture fixture)
             row => row.Key));
         Assert.Equal(ConnectionState.Closed, split.Database.GetDbConnection().State);
     }
+
+    [Fact]
+    public async Task UsesConfiguredSentinelForDefaultOmissionAndPreservesExplicitNull()
+    {
+        await MechanismDmlDatabase.ResetAsync(fixture.ConnectionString);
+        await using var context = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        var omitted = new NullableDefaultRow { UniqueKey = "omitted" };
+        var explicitNull = new NullableDefaultRow { UniqueKey = "explicit-null", Value = null };
+
+        Assert.True(await context.InsertIgnoreAsync(omitted, row => row.UniqueKey));
+        Assert.True(await context.InsertIgnoreAsync(explicitNull, row => row.UniqueKey));
+        Assert.Equal(EntityState.Detached, context.Entry(omitted).State);
+        Assert.Equal(EntityState.Detached, context.Entry(explicitNull).State);
+        var values = await context.NullableDefaults.AsNoTracking().ToDictionaryAsync(row => row.UniqueKey, row => row.Value);
+        Assert.Equal("database-default", values["omitted"]);
+        Assert.Null(values["explicit-null"]);
+    }
+
+    [Fact]
+    public async Task OmitsIdentityAlwaysSentinelButRejectsExplicitIdentityAndClientGeneration()
+    {
+        await MechanismDmlDatabase.ResetAsync(fixture.ConnectionString);
+        await using var context = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        Assert.True(await context.InsertIgnoreAsync(new IdentityAlwaysRow { UniqueKey = "generated" }, row => row.UniqueKey));
+        Assert.True(await context.IdentityAlways.AnyAsync(row => row.UniqueKey == "generated"));
+
+        var identityConnection = context.Database.GetDbConnection();
+        var explicitIdentity = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new IdentityAlwaysRow { Id = 7002, UniqueKey = "explicit" }, row => row.UniqueKey));
+        Assert.Contains("identity-always", explicitIdentity.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ConnectionState.Closed, identityConnection.State);
+
+        var clientGenerated = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new ClientGeneratedRow { UniqueKey = "client-generated" }, row => row.UniqueKey));
+        Assert.Contains("Client-generated", clientGenerated.Message, StringComparison.Ordinal);
+        Assert.Equal(ConnectionState.Closed, identityConnection.State);
+    }
+
+    [Fact]
+    public async Task ConverterFailureOccursBeforeOpeningTheDatabaseConnection()
+    {
+        await MechanismDmlDatabase.EnsureSchemaScriptAppliedAsync(fixture.ConnectionString);
+        await using var context = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => context.InsertIgnoreAsync(
+            new ThrowingConvertedRow { Key = new ThrowingKey("fail") }, row => row.Key));
+
+        Assert.Equal("forced value-converter failure", exception.Message);
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+        Assert.Empty(context.ChangeTracker.Entries());
+    }
+
+    [Fact]
+    public async Task SupportsPrimaryAndAlternateUniqueTargetsAndRejectsArbitraryCompositeConstruction()
+    {
+        await MechanismDmlDatabase.ResetAsync(fixture.ConnectionString);
+        await using var context = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        Assert.True(await context.InsertIgnoreAsync(
+            new IdentityDefaultRow { Id = 7010, UniqueKey = "primary-target", Payload = "primary" },
+            row => row.Id));
+        Assert.False(await context.InsertIgnoreAsync(
+            new IdentityDefaultRow { Id = 7010, UniqueKey = "primary-target-duplicate", Payload = "duplicate" },
+            row => row.Id));
+        Assert.True(await context.InsertIgnoreAsync(
+            new SecondaryUniqueRow { TargetKey = "alternate-target", SecondaryKey = "secondary-1" },
+            row => row.TargetKey));
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new CompositeUniqueRow { Left = "left", Right = "right", Payload = "arbitrary-constructor" },
+            row => new CompositeTarget(row.Left, row.Right)));
+        Assert.Contains("anonymous composite key", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+    }
+
+    [Fact]
+    public async Task RejectsOwnedSharedMappingBeforeOpeningConnection()
+    {
+        await MechanismDmlDatabase.EnsureSchemaScriptAppliedAsync(fixture.ConnectionString);
+        await using var context = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new OwnedMechanismDetails { Value = "owned" },
+            row => row.Value));
+
+        Assert.Contains("owned entity mappings", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+    }
+
+    [Fact]
+    public async Task WrongProviderRejectsInsertIgnoreWithoutOpeningConnection()
+    {
+        await using var context = new DbContext(new DbContextOptionsBuilder<DbContext>()
+            .UseProviderTestWarnings().UseSqlite("Data Source=:memory:").Options);
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new IdentityDefaultRow { UniqueKey = "wrong-provider" }, row => row.UniqueKey));
+        Assert.Contains("Npgsql EF Core provider", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+    }
 }
+
+internal sealed record CompositeTarget(string Left, string Right);

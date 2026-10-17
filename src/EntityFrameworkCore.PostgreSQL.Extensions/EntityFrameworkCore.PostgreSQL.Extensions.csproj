@@ -1,8 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <Version>0.1.0-preview.1</Version>
-    <Description>Experimental PostgreSQL extensions and query-carrier proof for Entity Framework Core.</Description>
+    <PackageId>EntityFrameworkCore.PostgreSQL.Extensions</PackageId>
+    <Version>0.1.0-preview.2</Version>
+    <Authors>Keeyahto</Authors>
+    <Description>Typed PostgreSQL row locks, transaction advisory locks, atomic insert-ignore and database time for Entity Framework Core.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -14,8 +16,9 @@
     <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" VersionOverride="[10.0.3,11.0.0)" />
+    <PackageReference Include="Npgsql" VersionOverride="[10.0.3,11.0.0)" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="[10.0.12,11.0.0)" />
     <None Include="../../README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

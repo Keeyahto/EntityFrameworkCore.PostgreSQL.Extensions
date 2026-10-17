@@ -6,6 +6,8 @@ using Xunit;
 namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Mechanisms;
 
 [Collection(PostgreSqlCollection.Name)]
+[Trait("Category", "PostgreSQL")]
+[Trait("MechanismTestCategory", "PostgreSQL")]
 public sealed class CapabilityProbeTests(PostgreSqlFixture fixture)
 {
     [Fact]
@@ -42,7 +44,7 @@ public sealed class CapabilityProbeTests(PostgreSqlFixture fixture)
     [Fact]
     public async Task ReadsAnExplicitNpgsqlSqlTargetWithoutChangingIt()
     {
-        var options = new DbContextOptionsBuilder<DbContext>().UsePocMatrixWarnings()
+        var options = new DbContextOptionsBuilder<DbContext>().UseProviderTestWarnings()
             .UseNpgsql(fixture.ConnectionString, npgsql => npgsql.SetPostgresVersion(15, 0))
             .Options;
         await using var context = new DbContext(options);
@@ -56,7 +58,7 @@ public sealed class CapabilityProbeTests(PostgreSqlFixture fixture)
     [Fact]
     public async Task TargetNewerThanActualServerIsIncompatible()
     {
-        var options = new DbContextOptionsBuilder<DbContext>().UsePocMatrixWarnings()
+        var options = new DbContextOptionsBuilder<DbContext>().UseProviderTestWarnings()
             .UseNpgsql(fixture.ConnectionString, npgsql => npgsql.SetPostgresVersion(17, 0))
             .Options;
         await using var context = new DbContext(options);
@@ -71,7 +73,7 @@ public sealed class CapabilityProbeTests(PostgreSqlFixture fixture)
     [Fact]
     public async Task ConnectionFailureIsIndeterminateAndCallerCancellationPropagates()
     {
-        var unreachable = new DbContextOptionsBuilder<DbContext>().UsePocMatrixWarnings()
+        var unreachable = new DbContextOptionsBuilder<DbContext>().UseProviderTestWarnings()
             .UseNpgsql("Host=127.0.0.1;Port=1;Username=none;Password=none;Database=none;Timeout=1")
             .Options;
         await using var failedContext = new DbContext(unreachable);
@@ -90,7 +92,7 @@ public sealed class CapabilityProbeTests(PostgreSqlFixture fixture)
     [Fact]
     public async Task WrongProviderReturnsIncompatibleWithoutOpeningItsConnection()
     {
-        var options = new DbContextOptionsBuilder<DbContext>().UsePocMatrixWarnings().UseSqlite("Data Source=:memory:").Options;
+        var options = new DbContextOptionsBuilder<DbContext>().UseProviderTestWarnings().UseSqlite("Data Source=:memory:").Options;
         await using var context = new DbContext(options);
 
         var report = await PostgreSqlCapabilityProbe.CheckAsync(context, Array.Empty<PostgreSqlExtensionRequirement>());
@@ -101,5 +103,5 @@ public sealed class CapabilityProbeTests(PostgreSqlFixture fixture)
     }
 
     private DbContext CreateNpgsqlContext()
-        => new(new DbContextOptionsBuilder<DbContext>().UsePocMatrixWarnings().UseNpgsql(fixture.ConnectionString).Options);
+        => new(new DbContextOptionsBuilder<DbContext>().UseProviderTestWarnings().UseNpgsql(fixture.ConnectionString).Options);
 }

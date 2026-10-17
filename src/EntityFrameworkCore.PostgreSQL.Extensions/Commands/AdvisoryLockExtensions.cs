@@ -10,7 +10,8 @@ public static class AdvisoryLockExtensions
     /// <param name="database">The database facade whose current transaction owns the lock.</param>
     /// <param name="key">The text key to hash on PostgreSQL.</param>
     /// <param name="cancellationToken">The operation cancellation token.</param>
-    /// <exception cref="InvalidOperationException">No current EF transaction exists.</exception>
+    /// <exception cref="InvalidOperationException">No current EF transaction exists, or it is not attached to the Npgsql connection.</exception>
+    /// <exception cref="NotSupportedException">The database does not use the Npgsql EF Core provider and connection.</exception>
     public static async Task AcquireTransactionAdvisoryLockAsync(
         this DatabaseFacade database,
         string key,
@@ -18,7 +19,8 @@ public static class AdvisoryLockExtensions
     {
         ArgumentNullException.ThrowIfNull(database);
         ArgumentNullException.ThrowIfNull(key);
-        RequireCurrentTransaction(database);
+        var connection = PostgreSqlCommandGuard.GetConnection(database, nameof(AcquireTransactionAdvisoryLockAsync));
+        PostgreSqlCommandGuard.GetCurrentTransaction(database, connection, nameof(AcquireTransactionAdvisoryLockAsync), required: true);
 
         await database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock(hashtextextended({key}, 0))",
@@ -29,14 +31,16 @@ public static class AdvisoryLockExtensions
     /// <param name="database">The database facade whose current transaction owns the lock.</param>
     /// <param name="key">The 64-bit PostgreSQL advisory-lock key.</param>
     /// <param name="cancellationToken">The operation cancellation token.</param>
-    /// <exception cref="InvalidOperationException">No current EF transaction exists.</exception>
+    /// <exception cref="InvalidOperationException">No current EF transaction exists, or it is not attached to the Npgsql connection.</exception>
+    /// <exception cref="NotSupportedException">The database does not use the Npgsql EF Core provider and connection.</exception>
     public static async Task AcquireTransactionAdvisoryLockAsync(
         this DatabaseFacade database,
         long key,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(database);
-        RequireCurrentTransaction(database);
+        var connection = PostgreSqlCommandGuard.GetConnection(database, nameof(AcquireTransactionAdvisoryLockAsync));
+        PostgreSqlCommandGuard.GetCurrentTransaction(database, connection, nameof(AcquireTransactionAdvisoryLockAsync), required: true);
 
         await database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock({key})",
@@ -48,7 +52,8 @@ public static class AdvisoryLockExtensions
     /// <param name="key1">The first 32-bit PostgreSQL advisory-lock key.</param>
     /// <param name="key2">The second 32-bit PostgreSQL advisory-lock key.</param>
     /// <param name="cancellationToken">The operation cancellation token.</param>
-    /// <exception cref="InvalidOperationException">No current EF transaction exists.</exception>
+    /// <exception cref="InvalidOperationException">No current EF transaction exists, or it is not attached to the Npgsql connection.</exception>
+    /// <exception cref="NotSupportedException">The database does not use the Npgsql EF Core provider and connection.</exception>
     public static async Task AcquireTransactionAdvisoryLockAsync(
         this DatabaseFacade database,
         int key1,
@@ -56,7 +61,8 @@ public static class AdvisoryLockExtensions
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(database);
-        RequireCurrentTransaction(database);
+        var connection = PostgreSqlCommandGuard.GetConnection(database, nameof(AcquireTransactionAdvisoryLockAsync));
+        PostgreSqlCommandGuard.GetCurrentTransaction(database, connection, nameof(AcquireTransactionAdvisoryLockAsync), required: true);
 
         await database.ExecuteSqlInterpolatedAsync(
             $"SELECT pg_advisory_xact_lock({key1}, {key2})",
@@ -66,22 +72,16 @@ public static class AdvisoryLockExtensions
     /// <summary>Marks the current caller-owned PostgreSQL transaction read-only.</summary>
     /// <param name="database">The database facade whose current transaction is changed.</param>
     /// <param name="cancellationToken">The operation cancellation token.</param>
-    /// <exception cref="InvalidOperationException">No current EF transaction exists.</exception>
+    /// <exception cref="InvalidOperationException">No current EF transaction exists, or it is not attached to the Npgsql connection.</exception>
+    /// <exception cref="NotSupportedException">The database does not use the Npgsql EF Core provider and connection.</exception>
     public static async Task SetTransactionReadOnlyAsync(
         this DatabaseFacade database,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(database);
-        RequireCurrentTransaction(database);
+        var connection = PostgreSqlCommandGuard.GetConnection(database, nameof(SetTransactionReadOnlyAsync));
+        PostgreSqlCommandGuard.GetCurrentTransaction(database, connection, nameof(SetTransactionReadOnlyAsync), required: true);
 
         await database.ExecuteSqlRawAsync("SET TRANSACTION READ ONLY", cancellationToken).ConfigureAwait(false);
-    }
-
-    private static void RequireCurrentTransaction(DatabaseFacade database)
-    {
-        if (database.CurrentTransaction is null)
-        {
-            throw new InvalidOperationException("This PostgreSQL operation requires an existing caller-owned EF transaction.");
-        }
     }
 }

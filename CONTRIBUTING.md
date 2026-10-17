@@ -1,21 +1,22 @@
 # Contributing
 
-This is an experimental, independently buildable .NET 10 repository. It contains one runtime project and one test project. Use a stable .NET 10 SDK; `global.json` requests 10.0.100 and allows the latest feature band. The current machine resolves that request to SDK 10.0.401. NuGet restore and Docker or a compatible container runtime are required for the full PostgreSQL test suite.
+This is a standalone .NET 10 repository with one runtime project and one test project. `global.json` requests SDK `10.0.100`, allows `latestFeature` roll-forward and disables prereleases; the reference resolution is SDK `10.0.401`. Restore requires NuGet access. Full PostgreSQL integration and the packed-consumer runner require Docker or a compatible container runtime.
 
 From the repository root:
 
 ```powershell
 dotnet restore
-dotnet build -c Release --no-restore
-dotnet test -c Release --no-build --logger trx
-dotnet test -c Release --no-build --filter Category=Unit --logger trx
-dotnet pack -c Release --no-build -o artifacts/packages
+dotnet build --no-restore --configuration Release
+dotnet test --no-build --configuration Release --logger trx
+dotnet test --no-build --configuration Release --filter Category=Unit --logger trx
+dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --no-build --configuration Release --output artifacts/packages
+pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.2.nupkg
 ```
 
-The integration fixture starts an isolated PostgreSQL 16 Alpine container through Testcontainers. No test setting for a manually supplied PostgreSQL database is defined. The Linux workflow runs restore, Release build, the full test suite and pack. The Windows workflow runs restore, Release build and tests filtered to `Category=Unit`. These workflows describe configured checks; their presence does not establish that a run passed.
+The integration fixture uses the pinned PostgreSQL 16.14 Testcontainers image. The package runner inspects the package, copies its exact bytes into a fresh local feed and package cache, restores and builds the tracked consumer template in a temporary workspace outside the checkout, then runs it against real PostgreSQL. The consumer has a `PackageReference` and no project or source reference. An evidence directory may be supplied with `-EvidenceDirectory`; `-KeepWorkspace` retains the temporary workspace for diagnosis.
 
-Read [architecture](docs/architecture.md), [query integration](docs/query-integration.md), [PoC plan](docs/poc-plan.md), and [compatibility](docs/compatibility.md) before changing those mechanisms or claims. Prefer existing EF Core/Npgsql behavior where it provides the required semantics. Preserve fail-closed query handling, caller-owned transaction boundaries, cancellation propagation, and PostgreSQL SQLSTATE behavior.
+GitHub Actions configures a Linux restore, Release build, full test run, package build and isolated consumer run. Its Windows job configures restore, Release build and tests filtered to `Category=Unit`. These are configured workflows; their presence does not report a run outcome.
 
-Implement the selected expression-interceptor design and finite scope in the [first-production contract](docs/briefs/production-contract.md). Experimental comparison paths have no production compatibility requirement. A command interceptor validates execution preconditions and fulfillment without rewriting SQL text. Preserve the single runtime assembly and native transaction ownership; additional query shapes require a contract amendment and provider proof.
+Read [architecture](docs/architecture.md), [query integration](docs/query-integration.md), [compatibility](docs/compatibility.md) and the [first-production contract](docs/briefs/production-contract.md) before changing their mechanisms or claims. Preserve the four independent integration boundaries, fail-closed row-lock query behavior, caller-owned transactions, cancellation propagation and native PostgreSQL errors. Keep provider evidence distinct from compilation and package construction, and keep all actual outcomes with their change evidence.
 
-Record actual versions and results with the change evidence. Distinguish compilation, unit tests, real PostgreSQL execution, package construction, isolated packed-consumer execution, and publication. None implies another. Do not claim a compatibility range or released package from local compilation or `dotnet pack` alone.
+The implementation targets the selected parameterless `UsePostgreSqlExtensions()` registration and expression-interceptor row-lock path. Comparison carriers are research history, not production runtime options. Do not add query shapes, dependency support claims, API compatibility promises or publication behavior beyond the current contract and evidence.

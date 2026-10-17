@@ -46,14 +46,14 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         }
     }
 
-    public ProbeContext CreateContext(PocCarrier? candidate = null)
+    public ProbeContext CreateContext(bool enableExtensions = false)
     {
-        var options = new DbContextOptionsBuilder<ProbeContext>().UsePocMatrixWarnings()
+        var options = new DbContextOptionsBuilder<ProbeContext>().UseProviderTestWarnings()
             .UseNpgsql(ConnectionString, npgsql =>
             {
-                if (candidate is { } selectedCarrier)
+                if (enableExtensions)
                 {
-                    npgsql.UsePostgreSqlExtensions(selectedCarrier);
+                    npgsql.UsePostgreSqlExtensions();
                 }
             })
             .Options;

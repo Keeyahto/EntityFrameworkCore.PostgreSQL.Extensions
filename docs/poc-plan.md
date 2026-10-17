@@ -1,6 +1,6 @@
 # PGEXT-Q-PoC — Executable design-validation work package
 
-The repository contains a .NET 10 runtime project and test project implementing the current PoC. Bounded local PostgreSQL checks exercise id-equality root locks, `OrderBy(...).Take(1)`, and synchronous/asynchronous compiled-query forms across carriers A/B/C. Specific tested relational cases in Q05–Q12 reject before issuing a SELECT where required. Arbitrary unmarked-predicate subqueries and global query filters remain uncharacterized. This plan states the evidence required to select a carrier and admit production behavior; package construction and configured CI do not replace execution evidence. Detailed per-run outcomes remain with change evidence.
+This is the bounded experimental comparison plan. Its carrier alternatives and open questions describe the research scope. The [first-production contract](briefs/production-contract.md) owns the selected implementation and current admission requirements; [query gates](query-gates.md) describes current verification. Detailed comparison outcomes belong to [experimental evidence](experiments/query-carriers.md).
 
 ## Scope and order
 

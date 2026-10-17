@@ -1,12 +1,15 @@
 using System.Data;
 using EntityFrameworkCore.PostgreSQL.Extensions.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using EntityFrameworkCore.PostgreSQL.Extensions;
 using Npgsql;
 using Xunit;
 
 namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Mechanisms;
 
 [Collection(PostgreSqlCollection.Name)]
+[Trait("Category", "PostgreSQL")]
+[Trait("MechanismTestCategory", "PostgreSQL")]
 public sealed class CommandMechanismTests(PostgreSqlFixture fixture)
 {
     [Fact]
@@ -107,7 +110,7 @@ public sealed class CommandMechanismTests(PostgreSqlFixture fixture)
         await using var connection = new NpgsqlConnection(fixture.ConnectionString);
         await connection.OpenAsync();
         await using var borrowed = await connection.BeginTransactionAsync();
-        var options = new DbContextOptionsBuilder<ProbeContext>().UsePocMatrixWarnings().UseNpgsql(connection).Options;
+        var options = new DbContextOptionsBuilder<ProbeContext>().UseProviderTestWarnings().UseNpgsql(connection).Options;
         await using var context = new ProbeContext(options);
         await context.Database.UseTransactionAsync(borrowed);
         var key = 5_400_000_000L + Random.Shared.Next(1, int.MaxValue);
@@ -132,6 +135,21 @@ public sealed class CommandMechanismTests(PostgreSqlFixture fixture)
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => context.Database.AcquireTransactionAdvisoryLockAsync("missing"));
         await Assert.ThrowsAsync<InvalidOperationException>(() => context.Database.SetTransactionReadOnlyAsync());
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+    }
+
+    [Fact]
+    public async Task WrongProviderRejectsAdvisoryAndReadOnlyCommandsBeforeOpeningConnection()
+    {
+        await using var context = new DbContext(new DbContextOptionsBuilder<DbContext>()
+            .UseProviderTestWarnings().UseSqlite("Data Source=:memory:").Options);
+        var advisory = await Assert.ThrowsAsync<NotSupportedException>(
+            () => context.Database.AcquireTransactionAdvisoryLockAsync("wrong-provider"));
+        var readOnly = await Assert.ThrowsAsync<NotSupportedException>(
+            () => context.Database.SetTransactionReadOnlyAsync());
+
+        Assert.Contains("Npgsql EF Core provider", advisory.Message, StringComparison.Ordinal);
+        Assert.Contains("Npgsql EF Core provider", readOnly.Message, StringComparison.Ordinal);
         Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
     }
 
@@ -200,7 +218,7 @@ public sealed class CommandMechanismTests(PostgreSqlFixture fixture)
     {
         const string payload = "command-test";
         await context.Database.ExecuteSqlInterpolatedAsync(
-            $"INSERT INTO \"Rows\" (\"Id\", \"PeerId\", \"Rank\", \"Payload\") VALUES ({id}, 0, 0, {payload})");
+            $"INSERT INTO \"Rows\" (\"Id\", \"PeerId\", \"Rank\", \"Payload\", \"NaturalCode\", \"CompositeLeft\", \"CompositeRight\", \"ConvertedKey\", \"IsDeleted\") VALUES ({id}, 0, 0, {payload}, {string.Concat("natural-", id)}, {string.Concat("left-", id)}, {string.Concat("right-", id)}, {string.Concat("converted-", id)}, FALSE)");
     }
 
     private static async Task<int> GetBackendPidAsync(ProbeContext context)

@@ -3,16 +3,16 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Infrastructure;
 
-internal static class PocMatrixOptions
+internal static class ProviderTestOptions
 {
-    public static DbContextOptionsBuilder<TContext> UsePocMatrixWarnings<TContext>(
+    public static DbContextOptionsBuilder<TContext> UseProviderTestWarnings<TContext>(
         this DbContextOptionsBuilder<TContext> builder) where TContext : DbContext
     {
         Configure(builder);
         return builder;
     }
 
-    public static DbContextOptionsBuilder UsePocMatrixWarnings(this DbContextOptionsBuilder builder)
+    public static DbContextOptionsBuilder UseProviderTestWarnings(this DbContextOptionsBuilder builder)
     {
         Configure(builder);
         return builder;
@@ -20,9 +20,8 @@ internal static class PocMatrixOptions
 
     private static void Configure(DbContextOptionsBuilder builder)
     {
-        // The comparison deliberately has more than twenty distinct provider configurations.
-        // Keep native provider/query caching and all other warnings; log this matrix-size warning.
-        // Configure before context construction and pooling freeze, including factory callbacks.
+        // Keep native provider/query caching and all other warnings; this suite intentionally exercises
+        // several independent provider compositions and a size-one pool.
         builder.ConfigureWarnings(warnings => warnings.Log(CoreEventId.ManyServiceProvidersCreatedWarning));
     }
 }

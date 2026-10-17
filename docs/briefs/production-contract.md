@@ -19,7 +19,7 @@ options.UseNpgsql(connectionString,
     npgsql => npgsql.UsePostgreSqlExtensions());
 ```
 
-`UsePostgreSqlExtensions(this NpgsqlDbContextOptionsBuilder)` returns the same builder. Its parameterless form is proposed and is absent from the experimental source. The current PoC requires an explicit carrier argument. The proposed single-clock-read helper below is also absent. Other APIs retain source names and receivers; their production admission remains conditional on this contract and fresh verification. Removing the experimental carrier argument/type is an intentional pre-release API change; production consumers must use the approved registration, with no compatibility alias retaining losing runtime paths.
+`UsePostgreSqlExtensions(this NpgsqlDbContextOptionsBuilder)` returns the same builder. Use this parameterless registration for row-lock queries. There is no public carrier selector or compatibility alias for the experimental comparison paths. Commands, typed DML and the clock helpers retain their natural EF receivers; their admission requires the verification below.
 
 Repeated registration is idempotent. A competing query-generator/translator replacement before or after registration fails explicitly; last-registration-wins behavior is forbidden. Additive native plugins such as NodaTime must remain functional. `AddDbContext`, factory and pooled configurations require separate composition tests. Manually assembled `UseInternalServiceProvider` configurations are unsupported and must fail clearly. Commands, DML and clock mapping require no query-plugin registration unless a row-lock query is used.
 
@@ -40,7 +40,7 @@ IQueryable<T> WithRowLock<T>(this IQueryable<T> source,
 
 The first implementation target is the following closed set. An allowed operator name alone does not admit arbitrary predicates, mappings or compositions.
 
-| Form | Proposed target and proof boundary |
+| Form | Admitted target and proof boundary |
 |---|---|
 | Mapped entity root | One directly mapped table, one entity occurrence, tracked or `AsNoTracking`; materialize the entity itself |
 | Predicates | Equality of directly mapped scalar root properties to constants/parameters; conjunctions of those equalities; no navigation traversal, subquery or client evaluation. Nullable-key cases and value converters need their explicit mapping/null/converter fixtures |
@@ -93,7 +93,7 @@ This operation does not attach the entity, modify existing tracking state, call 
 
 Retain `ModelBuilder.MapClockTimestamp()` returning `ModelBuilder`, and `DateTime DatabaseClock.ClockTimestamp()` translated to `pg_catalog.clock_timestamp()`. Direct client invocation throws. UTC/microsecond mapping requires provider proof. PostgreSQL transaction time (`now()`) retains its distinct native meaning; there is no client-clock fallback. The mapping alone does not guarantee one evaluation of a volatile function or support for arbitrary update/CTE expressions. If several fields require one time basis, the caller must sample once or use a separately proven single-evaluation shape. Whether sampling is valid for a specific mutation predicate remains with its semantic owner.
 
-Propose `Task<DateTime> ReadClockTimestampAsync(this DatabaseFacade database, CancellationToken cancellationToken = default)`: perform one native server clock read, return one UTC value at PostgreSQL precision, borrow the current transaction when present and balance only connection ownership acquired by the call. Without a transaction, a native single-statement read is allowed; no transaction is created. The caller reuses the returned value explicitly. This new typed helper needs production implementation and real-provider/packed-consumer proof. It supplies no TTL/interval/overflow policy and does not prove equivalence to a compound server-side lease statement. Predicate and `ExecuteUpdate` clock translation, `DateTimeOffset` conversions, shared-sample server arithmetic and overflow behavior need separate proofs before those consumer uses are admitted.
+`Task<DateTime> ReadClockTimestampAsync(this DatabaseFacade database, CancellationToken cancellationToken = default)` performs one native server clock read, returns one UTC value at PostgreSQL precision, borrows the current transaction when present and balances only connection ownership acquired by the call. Without a transaction, a native single-statement read is allowed; no transaction is created. The caller reuses the returned value explicitly. The helper requires real-provider and packed-consumer proof. It supplies no TTL/interval/overflow policy and does not prove equivalence to a compound server-side lease statement. Predicate and `ExecuteUpdate` clock translation, `DateTimeOffset` conversions, shared-sample server arithmetic and overflow behavior need separate proofs before those consumer uses are admitted.
 
 Retain `Task DatabaseFacade.SetTransactionReadOnlyAsync(CancellationToken ct = default)` only as a native command under an existing transaction. PostgreSQL enforces command timing and write restrictions. It changes no session default, restores no aborted transaction and chooses no isolation level. It requires its own packed-consumer proof.
 
@@ -112,7 +112,7 @@ The effective Npgsql SQL target governs SQL generation. The actual server and in
 | SQL-generation target | Existing Npgsql target `14.0` against that server; the separate `15.0` check is a context-isolation probe, not server-14/15 support |
 | Package identity/release | Actual ID ownership, release version/feed and publication permission remain release decisions |
 
-Test these exact packages first. Minimum declared dependencies must match tested versions; the proposed support line is EF/Npgsql major 10 because the query integration uses provider internals. Do not advertise other 10.x patches or major 11 as supported from this evidence. NuGet dependency intervals and major bounds must reflect the adopted support policy and be inspected in the actual package; exact patch pins are not imposed on downstream consumers by this proposal. Expanding declared support requires additional package-consumer/provider evidence and a documented support amendment. NativeAOT, trimming, extra TFMs and all-version matrices are excluded.
+Test these exact packages first. Minimum declared dependencies must match tested versions; the support line is EF/Npgsql major 10 because the query integration uses provider internals. Do not advertise other 10.x patches or major 11 as supported from this evidence. NuGet dependency intervals and major bounds must reflect the adopted support policy and be inspected in the actual package; downstream consumers choose patches within those intervals. Expanding declared support requires additional package-consumer/provider evidence and a documented support amendment. NativeAOT, trimming, extra TFMs and all-version matrices are excluded.
 
 ## 8. Admission evidence and decisions
 
@@ -127,4 +127,4 @@ Production admission requires:
 5. Pack inspection and a fresh isolated neutral application that installs the exact `.nupkg` from a local feed, with no project/source reference, then runs positive and fail-closed cases for all included features on real PostgreSQL. Reusable packed-consumer composition must cover the supported registration forms.
 6. Independent substantive review, coherent maintained documentation and successful required CI runs. A local PoC run or workflow file alone does not establish those outcomes.
 
-Public repository access, local pack construction, isolated consumption and NuGet publication are distinct results. Publishing requires its own explicit authorization and actual account rights. Research evidence and this proposal cannot substitute for production or downstream-owner acceptance.
+Public repository access, local pack construction, isolated consumption and NuGet publication are distinct results. Publishing requires its own explicit authorization and actual account rights. Research evidence and contract approval cannot substitute for production or downstream-owner acceptance.

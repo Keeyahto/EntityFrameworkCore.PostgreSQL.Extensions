@@ -1,4 +1,4 @@
-name: PoC verification
+name: Library verification
 on:
   push:
   pull_request:
@@ -7,7 +7,7 @@ permissions:
 jobs:
   postgres:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -19,6 +19,12 @@ jobs:
       - run: dotnet build --no-restore --configuration Release
       - run: dotnet test --no-build --configuration Release --logger trx --results-directory artifacts/test-results
       - run: dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --no-build --configuration Release --output artifacts/packages
+      - name: Verify isolated package consumer
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem artifacts/packages/*.nupkg)
+          if ($packages.Count -ne 1) { throw 'Expected one runtime package.' }
+          ./scripts/Test-Package.ps1 -PackagePath $packages[0].FullName -EvidenceDirectory artifacts/package-consumer
   windows-unit:
     runs-on: windows-latest
     timeout-minutes: 10

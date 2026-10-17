@@ -122,15 +122,27 @@ internal static partial class QueryTestSupport
 
     public static ProbeContext CreateContext(
         PostgreSqlFixture fixture,
-        PocCarrier? candidate,
         SqlCommandObserver? observer = null)
     {
-        var builder = new DbContextOptionsBuilder<ProbeContext>().UsePocMatrixWarnings()
+        return CreateContext(fixture, enableExtensions: true, observer: observer);
+    }
+
+    public static ProbeContext CreateNativeContext(
+        PostgreSqlFixture fixture,
+        SqlCommandObserver? observer = null)
+        => CreateContext(fixture, enableExtensions: false, observer: observer);
+
+    private static ProbeContext CreateContext(
+        PostgreSqlFixture fixture,
+        bool enableExtensions,
+        SqlCommandObserver? observer)
+    {
+        var builder = new DbContextOptionsBuilder<ProbeContext>().UseProviderTestWarnings()
             .UseNpgsql(fixture.ConnectionString, npgsql =>
             {
-                if (candidate is { } selectedCarrier)
+                if (enableExtensions)
                 {
-                    npgsql.UsePostgreSqlExtensions(selectedCarrier);
+                    npgsql.UsePostgreSqlExtensions();
                 }
             });
 
@@ -146,6 +158,8 @@ internal static partial class QueryTestSupport
     {
         await fixture.ResetAsync();
         await using var context = fixture.CreateContext();
+        context.Peers.AddRange(rows.Select(row => row.PeerId).Distinct()
+            .Select(id => new PeerRow { Id = id, Payload = $"seed-peer-{id}" }));
         context.Rows.AddRange(rows);
         await context.SaveChangesAsync();
     }
@@ -159,6 +173,10 @@ internal static partial class QueryTestSupport
         await using var context = fixture.CreateContext();
         context.Rows.AddRange(rows);
         context.Peers.AddRange(peers);
+        var suppliedPeerIds = peers.Select(peer => peer.Id).ToHashSet();
+        context.Peers.AddRange(rows.Select(row => row.PeerId).Distinct()
+            .Where(id => !suppliedPeerIds.Contains(id))
+            .Select(id => new PeerRow { Id = id, Payload = $"seed-peer-{id}" }));
         await context.SaveChangesAsync();
     }
 
@@ -172,7 +190,6 @@ internal static partial class QueryTestSupport
     public static void WriteOutcome(
         Xunit.Abstractions.ITestOutputHelper output,
         string queryId,
-        PocCarrier candidate,
         string disposition,
         string detail)
     {
@@ -181,7 +198,7 @@ internal static partial class QueryTestSupport
             output.WriteLine($"POSTGRES_ENV|image={PostgreSqlFixture.ImageReference};serverVersion={PostgreSqlFixture.ObservedServerVersion}");
         }
 
-        output.WriteLine($"{queryId}|{candidate}|expected={disposition}|observed={disposition}|{detail}");
+        output.WriteLine($"{queryId}|production|expected={disposition}|observed={disposition}|{detail}");
     }
 
     [GeneratedRegex("""FROM "Rows" AS (?<alias>"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)""", RegexOptions.CultureInvariant)]

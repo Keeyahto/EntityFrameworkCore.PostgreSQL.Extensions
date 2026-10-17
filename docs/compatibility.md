@@ -1,21 +1,33 @@
 # Compatibility and evidence
 
-The repository targets `net10.0` with `global.json` requesting SDK `10.0.100`, `latestFeature` roll-forward and prereleases disabled. The current resolution is SDK `10.0.401`. Central package versions are Npgsql EF provider `10.0.3`, Npgsql `10.0.3`, and EF Core Relational `10.0.12`. The integration fixture pins `postgres:16-alpine@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20`, which runs PostgreSQL `16.14`. These are PoC inputs, not a released compatibility range.
+This page separates the selected reference inputs, package dependency metadata and verified consumer support. The implementation targets one `net10.0` runtime assembly. The project is versioned `0.1.0-preview.2`; package ID ownership and NuGet publication remain release decisions. No published package or verified compatibility range is established here.
 
-| Library release | EF Core / Npgsql | PostgreSQL | Evidence |
-|---|---|---|---|
-| None | No supported patch range declared | No supported server range declared | Bounded local PostgreSQL checks cover selected forms; production admission and packed-consumer evidence are not established |
+## Reference inputs
 
-There is one runtime library project and one test project. The tests use Testcontainers to start the configured PostgreSQL 16 image and require Docker or a compatible container runtime. No manually supplied database connection setting is documented by the test harness. The source includes provider-specific query generator and visitor integrations; compatibility beyond the exact restored package versions must be established independently.
+| Axis | Current reference input | What it establishes |
+|---|---|---|
+| Runtime | `net10.0` | The single target framework in the runtime project |
+| SDK request | `10.0.100`, `latestFeature`, prereleases disabled | A roll-forward request in `global.json`; it is not an exact SDK pin for consumers |
+| SDK reference resolution | `10.0.401` | The resolved SDK used as the initial reference, not the only SDK admitted by the request |
+| EF Core Relational | `10.0.12` | Exact central test/build input and package dependency minimum |
+| Npgsql EF Core provider | `10.0.3` | Exact central test/build input and package dependency minimum |
+| Npgsql | `10.0.3` | Exact central test/build input and package dependency minimum |
+| PostgreSQL server | `16.14`, from `postgres:16-alpine@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20` | Pinned reference fixture; it does not imply support for other patches or majors |
+| Npgsql SQL-generation target | `14.0` | The reference translation target used against the PostgreSQL 16.14 fixture; SQL target and server version are separate axes |
+| Library package metadata | `EntityFrameworkCore.PostgreSQL.Extensions`, `0.1.0-preview.2` | Project identity/version inputs; neither publication nor stable API status follows from them |
 
-Bounded local PostgreSQL checks exercise id-equality root locks, `OrderBy(...).Take(1)`, and synchronous/asynchronous compiled-query forms across carriers A/B/C. Specific tested Q05вЂ“Q12 relational cases reject before issuing a SELECT where required. Arbitrary unmarked-predicate subqueries and global query filters remain uncharacterized. The test inputs include Npgsql SQL target 14, a separate target-15 context smoke check, and a PostgreSQL 16.14 Testcontainers server; none declares a supported compatibility pair. The expected local checks are restore, Release build, full tests, unit-only tests, and pack as documented in [README](../README.md) and [CONTRIBUTING](../CONTRIBUTING.md). The configured Linux workflow covers restore, Release build, full tests and pack; Windows covers restore, Release build and unit tests. Remote CI has not been executed; local preview artifacts exist, with isolated packed-consumer validation still pending. Neither workflow configuration nor compilation alone establishes provider behavior.
+The package project declares EF Core Relational dependency range `[10.0.12,11.0.0)` and Npgsql provider and Npgsql ranges `[10.0.3,11.0.0)`. These are the current `.nuspec` dependency intervals, not evidence that every 10.x patch has been verified. Exact package inputs for builds and tests remain the versions above. A consumer's selected package versions and runtime behavior must be assessed against the evidence for that exact set.
 
-Before claiming compatibility, record the exact candidate version set and evidence for each axis: .NET target/SDK, EF Core and Npgsql package versions, PostgreSQL server version, and library API/package version. The lowest supported dependency and any upper bound remain undecided until tests and maintainer review establish them. Do not claim EF Core 8/9/11, PostgreSQL versions other than the tested major, multi-targeting, NativeAOT or trimming support without corresponding evidence.
+## Evidence boundaries
 
-Npgsql's configured SQL target governs translation. The actual connected server version and installed extensions are separate read-only probe facts. A database probe does not switch the SQL target, certify every replica or role, or install extensions. Capability validation is an explicit caller operation; no host startup/readiness integration is provided.
+The configured Linux workflow runs restore, Release build, the complete suite, package construction and `scripts/Test-Package.ps1`. The script restores and builds an isolated consumer using the supplied local `.nupkg`, verifies the copied/loaded package bytes, and runs the consumer against real PostgreSQL. The Windows workflow runs restore, Release build and unit tests. Workflow configuration does not establish that any run passed; concrete results belong to change evidence.
 
-Package creation and package publication are separate outcomes. A local `.nupkg` does not establish an isolated consumer contract or authorize publication. NuGet package ID availability and ownership are unresolved.
+Compilation, unit checks, real PostgreSQL execution, package construction, isolated package consumption, compatibility claims and publication are distinct outcomes. A local `.nupkg` does not establish a published package or a supported compatibility range. The consumer runner and full provider suite require Docker or a compatible container runtime.
 
-References: [architecture](architecture.md), [capability discovery](capabilities.md), [PoC plan](poc-plan.md).
+The Npgsql SQL-generation target controls translation. The connected server version and installed extension versions are separate observed facts. A capability probe reports those facts for one database and the requirements supplied by its caller; it does not switch the SQL target, certify other databases/roles/replicas, install extensions or provide host readiness policy.
 
-Exact local research and artifact evidence: [experimental comparison](experiments/query-carriers.md).
+## Scope limits
+
+The initial evidence target is the exact input set in the table. Do not infer support for other EF Core/Npgsql package revisions, PostgreSQL server patches or majors, additional TFMs, NativeAOT or trimming from the declared dependency intervals, a successful build, or package creation. Because the query generator integration uses provider-internal APIs, changing EF/Npgsql revisions requires targeted build, provider and packed-consumer evidence. Expanding a support claim requires an explicit support decision and evidence for each newly claimed boundary.
+
+References: [architecture](architecture.md), [capability discovery](capabilities.md), [first-production contract](briefs/production-contract.md), [query integration](query-integration.md).

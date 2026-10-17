@@ -14,9 +14,8 @@ namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Query;
 [Trait("Category", "PostgreSQL")]
 public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelper output)
 {
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Native_ef_nowait_error_wrapper_matches_unmarked_npgsql_control(PocCarrier candidate)
+    [Fact]
+    public async Task Native_ef_nowait_error_wrapper_matches_unmarked_npgsql_control()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "native-error-control" });
@@ -26,7 +25,7 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
         await holder.Rows.FromSqlRaw("SELECT * FROM \"Rows\" WHERE \"Id\" = 1 FOR UPDATE").SingleAsync();
 
         var observer = new SqlCommandObserver();
-        await using var control = QueryTestSupport.CreateContext(fixture, null, observer);
+        await using var control = QueryTestSupport.CreateNativeContext(fixture, observer);
         await using var controlTransaction = await control.Database.BeginTransactionAsync();
         var wrapper = await Assert.ThrowsAsync<InvalidOperationException>(() => control.Rows
             .FromSqlRaw("SELECT * FROM \"Rows\" WHERE \"Id\" = 1 FOR UPDATE NOWAIT")
@@ -36,19 +35,18 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
 
         await controlTransaction.RollbackAsync();
         await holderTransaction.RollbackAsync();
-        QueryTestSupport.WriteOutcome(output, "P3-native-wrapper-control", candidate, "supported-pass",
+        QueryTestSupport.WriteOutcome(output, "P3-native-wrapper-control", "supported-pass",
             $"nativeSqlState={native.SqlState};providerWrapper={wrapper.GetType().Name};executed={OneLine(observer.Commands.Single())};commandCount={observer.Count}");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Generated_locking_query_preserves_serialization_failure_40001(PocCarrier candidate)
+    [Fact]
+    public async Task Generated_locking_query_preserves_serialization_failure_40001()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "before" });
 
         var observer = new SqlCommandObserver();
-        await using var snapshot = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var snapshot = QueryTestSupport.CreateContext(fixture, observer);
         await using var snapshotTransaction = await snapshot.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var oldValue = await snapshot.Rows.Where(row => row.Id == 1).Select(row => row.Payload).SingleAsync();
         Assert.Equal("before", oldValue);
@@ -71,13 +69,12 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
         Assert.Contains("FOR UPDATE OF", observer.Commands.Last(), StringComparison.Ordinal);
 
         await snapshotTransaction.RollbackAsync(CancellationToken.None);
-        QueryTestSupport.WriteOutcome(output, "P3-serialization-40001", candidate, "native-failure-preserved",
+        QueryTestSupport.WriteOutcome(output, "P3-serialization-40001", "native-failure-preserved",
             $"generated={OneLine(generatedSql)};executed={OneLine(observer.Commands.Last())};backendIds={snapshotBackend},{updaterBackend};snapshotValue={oldValue};nativeSqlState={native.SqlState};providerWrapper={wrapper.GetType().Name};commands={observer.Count};rollback=after-abort");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Generated_locking_query_deadlock_preserves_40P01_with_observed_lock_waits(PocCarrier candidate)
+    [Fact]
+    public async Task Generated_locking_query_deadlock_preserves_40P01_with_observed_lock_waits()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "left" },
@@ -85,9 +82,9 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
 
         var leftObserver = new SqlCommandObserver();
         var rightObserver = new SqlCommandObserver();
-        await using var left = QueryTestSupport.CreateContext(fixture, candidate, leftObserver);
+        await using var left = QueryTestSupport.CreateContext(fixture, leftObserver);
         await using var leftTransaction = await left.Database.BeginTransactionAsync();
-        await using var right = QueryTestSupport.CreateContext(fixture, candidate, rightObserver);
+        await using var right = QueryTestSupport.CreateContext(fixture, rightObserver);
         await using var rightTransaction = await right.Database.BeginTransactionAsync();
         await left.Rows.Where(row => row.Id == 1).ForUpdate().SingleAsync();
         await right.Rows.Where(row => row.Id == 2).ForUpdate().SingleAsync();
@@ -120,13 +117,12 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
 
         await leftTransaction.RollbackAsync(CancellationToken.None);
         await rightTransaction.RollbackAsync(CancellationToken.None);
-        QueryTestSupport.WriteOutcome(output, "P3-deadlock-40P01", candidate, "native-failure-preserved",
+        QueryTestSupport.WriteOutcome(output, "P3-deadlock-40P01", "native-failure-preserved",
             $"generated={OneLine(leftSql)}|{OneLine(rightSql)};executed={OneLine(leftObserver.Commands.Last())}|{OneLine(rightObserver.Commands.Last())};backendIds={leftBackend},{rightBackend};waitEventTypes={leftWaitState},{rightWaitState};nativeSqlState={native.SqlState};victim={deadlockWrapper.GetType().Name};survivorId={survivorId};commands={leftObserver.Count},{rightObserver.Count};rollback=after-deadlock");
     }
 
-    [Theory]
-    [MemberData(nameof(AdmittedRootShapeTests.Candidates), MemberType = typeof(AdmittedRootShapeTests))]
-    public async Task Terminated_waiting_backend_preserves_postgresql_admin_shutdown(PocCarrier candidate)
+    [Fact]
+    public async Task Terminated_waiting_backend_preserves_postgresql_admin_shutdown()
     {
         await QueryTestSupport.SeedAsync(fixture,
             new ProbeRow { Id = 1, PeerId = 7, Rank = 10, Payload = "terminated" });
@@ -136,7 +132,7 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
         await holder.Rows.FromSqlRaw("SELECT * FROM \"Rows\" WHERE \"Id\" = 1 FOR UPDATE").SingleAsync();
 
         var observer = new SqlCommandObserver();
-        await using var target = QueryTestSupport.CreateContext(fixture, candidate, observer);
+        await using var target = QueryTestSupport.CreateContext(fixture, observer);
         var targetTransaction = await target.Database.BeginTransactionAsync();
         var targetBackend = await BackendIdAsync(target.Database.GetDbConnection(), targetTransaction.GetDbTransaction());
         var query = target.Rows.Where(row => row.Id == 1).ForUpdate();
@@ -159,7 +155,7 @@ public sealed class QueryFailureTests(PostgreSqlFixture fixture, ITestOutputHelp
         await target.Database.CloseConnectionAsync();
         await targetTransaction.DisposeAsync();
         await holderTransaction.RollbackAsync();
-        QueryTestSupport.WriteOutcome(output, "P3-backend-termination", candidate, "native-failure-preserved",
+        QueryTestSupport.WriteOutcome(output, "P3-backend-termination", "native-failure-preserved",
             $"generated={OneLine(generatedSql)};executed={OneLine(observer.Commands.Single())};backendId={targetBackend};waitEventType={waitEvent};nativeSqlState={native.SqlState};providerWrapper={wrapper.GetType().Name};commands={observer.Count};targetCleanup=terminated-connection-closed;holderRollback=release");
     }
 
