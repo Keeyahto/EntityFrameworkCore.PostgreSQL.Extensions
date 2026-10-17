@@ -50,4 +50,4 @@ The full test command includes PostgreSQL integration tests. A successful `dotne
 
 The [experimental comparison and observations](docs/experiments/query-carriers.md) record the exact research scope, evidence and proposed NARROW outcome.
 
-The [proposed first-production contract](docs/briefs/production-contract.md) gives the concrete API, query-shape and compatibility target for maintainer review. It remains unapproved and introduces no implemented production support.
+The [first-production contract](docs/briefs/production-contract.md) defines the approved API, query-shape and compatibility target. Implementation and package admission require their own evidence; source and examples remain experimental until that work is accepted.

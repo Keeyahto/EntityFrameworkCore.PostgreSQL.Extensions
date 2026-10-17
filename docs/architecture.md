@@ -1,6 +1,6 @@
 # EntityFrameworkCore.PostgreSQL.Extensions — архитектура публичной библиотеки
 
-This repository contains an experimental PoC for one PostgreSQL-specific EF Core/Npgsql library. The four integration boundaries and their constraints are the design baseline. Bounded local PostgreSQL checks cover selected query, DML, and scalar-function forms. The production query carrier, public API scope, compatibility range, and NuGet publication have not been admitted; detailed verification evidence belongs with the change record.
+This repository develops one PostgreSQL-specific EF Core/Npgsql library. The four integration boundaries and their constraints are the design baseline. The [first-production contract](briefs/production-contract.md) selects the expression-interceptor carrier, exact initial API/query grammar and evidence target. Implementation, supported compatibility and isolated-package acceptance require their own evidence; NuGet publication remains separate. Detailed verification results belong with change evidence.
 
 ## A. Product contract и позиционирование
 
@@ -176,7 +176,7 @@ Exceptions should normally use established EF/Npgsql and .NET exception classes 
 | LIB-03 | One NuGet package / one runtime assembly + internal capability folders | Implemented as the current project topology; NuGet ID availability remains unknown |
 | LIB-04 | `net10.0`, SDK 10.0.100/latestFeature; EF Core 10/Npgsql 10 baseline | Current project pins are documented above; no support range is established |
 | LIB-05 | One public namespace; provider opt-in only for features that need it | API and registration are experimental |
-| LIB-06 | Structural query generation, never command-text lock rewriting | A/B/C carriers are implemented as probes; no winner selected |
+| LIB-06 | Structural query generation, never command-text lock rewriting | Expression-interceptor design selected; native Npgsql translator retained; implementation admission requires current evidence |
 | LIB-07 | Admit public behavior only after query, DML and clock semantics are proven | Bounded local PostgreSQL checks cover selected forms; production API admission remains subject to maintainer review |
 | LIB-08 | Apache-2.0; SemVer and trusted publishing for a future release | License is present; package identity and publication remain open |
 | LIB-09 | Independent library build, documentation and contribution workflow | Standalone setup and contribution instructions are present; local package construction and remote CI remain unverified |
@@ -233,7 +233,7 @@ The four independent technical integration mechanisms are the design baseline. T
 
 | Mechanism | Класс задачи | Предпочтительная точка интеграции | Статус реализации |
 |---|---|---|---|
-| Query Integration | Row-level locking | Structural EF/Npgsql query pipeline and SQL generation | A/B/C carriers have bounded local PostgreSQL checks; no production carrier or supported-shape set is selected |
+| Query Integration | Row-level locking | Structural EF/Npgsql query pipeline and SQL generation | Expression-interceptor design and finite root grammar selected; implementation/provider/package admission requires evidence |
 | Scalar Expression Integration | PostgreSQL functions such as `clock_timestamp()` | Native `DbFunction` or additive translator where needed | Clock mapping has bounded provider checks; public admission remains open |
 | Command Execution | Transaction-scoped advisory locks | `DatabaseFacade` command under the caller's existing transaction | The experimental helper has bounded PostgreSQL checks; public admission remains open |
 | Typed DML Construction | `INSERT ... ON CONFLICT DO NOTHING` | Typed values, EF metadata and parameterized PostgreSQL DML | The experimental helper has bounded PostgreSQL checks; public admission remains open |
@@ -242,7 +242,7 @@ The four independent technical integration mechanisms are the design baseline. T
 
 **Минимум общей инфраструктуры:** единая регистрация там, где заменяются provider services; узкая compatibility/diagnostics support; общего базового `IPostgreSqlOperation`, собственных DI/container/transaction managers или комплексного SQL AST нет. Повторяющиеся части становятся общими по доказанному совпадению семантики.
 
-**Admission constraints:** implementation and successful compilation do not alone select a carrier. `SelectExpression` in EF10 is sealed and its `WithAnnotations` throws; `TableExpression` annotations and `IQueryExpressionInterceptor` remain experimental carrier choices. `ForUpdate()` must fail closed when the extension is missing or a shape is unsupported; it must never silently produce an unlocked result.
+**Admission constraints:** design selection and successful compilation do not establish supported execution. The selected expression-interceptor design retains the native translator and validates original expression/model, final SQL structure and command-time transaction/fulfillment. `ForUpdate()` fails closed when configuration is missing or a shape is unsupported; successful unlocked execution is forbidden.
 
 The current code is a PoC, not a production feature. No API signature or carrier becomes stable by appearing in source. Production admission requires exact supported and rejected shapes, correct alias/scope behavior, real PostgreSQL concurrency evidence, registration/cache/plugin composition checks, and maintainer approval. See [PoC plan](poc-plan.md).
 

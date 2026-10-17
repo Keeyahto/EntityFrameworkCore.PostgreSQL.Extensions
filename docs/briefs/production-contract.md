@@ -1,6 +1,6 @@
-# Proposed first-production contract
+# First-production contract
 
-**Status: proposed; maintainer approval pending.** This is the exact target for a first production implementation. The checkout contains experimental implementations. This proposal grants no supported release, compatibility range or completed package-consumer proof. [Architecture](../architecture.md) owns the general technical boundaries; [query integration](../query-integration.md) owns query correctness; [production brief](PGEXT-PRODUCTION.md) owns the implementation and verification outcome. Detailed research observations remain in [experimental evidence](../experiments/query-carriers.md).
+**Status: approved implementation target.** This contract defines the first production implementation. Implementation admission, compatibility and package-consumer proof require the evidence below; approval alone establishes none of those results. [Architecture](../architecture.md) owns the general technical boundaries; [query integration](../query-integration.md) owns query correctness; [production brief](PGEXT-PRODUCTION.md) owns the implementation and verification outcome. Detailed research observations remain in [experimental evidence](../experiments/query-carriers.md).
 
 ## 1. Package boundary
 
@@ -12,7 +12,7 @@ The library accepts no application permissions, business revision policy, recove
 
 Use an expression interceptor to validate a typed lock marker and carry immutable intent through a reserved internal tag; generate the lock structurally in the final SELECT. Retain Npgsql's native query translator. Replace only `IQuerySqlGeneratorFactory`; a command interceptor validates fulfillment, service composition and the current transaction without modifying SQL. The annotation/translator comparison carriers and the public `PocCarrier` switch have no production runtime path.
 
-Proposed registration:
+Registration:
 
 ```csharp
 options.UseNpgsql(connectionString,
@@ -25,7 +25,7 @@ Repeated registration is idempotent. A competing query-generator/translator repl
 
 ## 3. Row-lock API and admissible queries
 
-Proposed signatures, all in the public namespace:
+Signatures, all in the public namespace:
 
 ```csharp
 IQueryable<T> ForUpdate<T>(this IQueryable<T> source);
@@ -101,7 +101,7 @@ Retain the caller-invoked read-only `PostgreSqlCapabilityProbe.CheckAsync(DbCont
 
 The effective Npgsql SQL target governs SQL generation. The actual server and installed extensions are separate observations. Compare only declared required extensions; unused absent extensions are irrelevant. An unreadable database yields `Indeterminate`, a mismatch yields `Incompatible`; neither establishes readiness. The host chooses its readiness boundary and handles non-compatible results. The probe changes no target and installs no extension. Auto-target selection, per-query probing and host lifecycle management are excluded.
 
-## 7. Proposed initial compatibility policy
+## 7. Initial compatibility policy
 
 | Axis | Initial target for production evidence |
 |---|---|
@@ -116,7 +116,7 @@ Test these exact packages first. Minimum declared dependencies must match tested
 
 ## 8. Admission evidence and decisions
 
-Maintainer approval must explicitly cover the expression-interceptor carrier, public API/registration, admitted/rejected shapes and the initial feature/compatibility scope above. Approval selects a target; each implemented guarantee still requires current evidence. Any required narrower scope or semantic change must amend this contract before a consumer relies on it.
+The selected target comprises the expression-interceptor carrier, public API/registration, admitted/rejected shapes and initial feature/compatibility scope above. Each implemented guarantee requires current evidence. Any required narrower scope or semantic change must amend this contract before a consumer relies on it.
 
 Production admission requires:
 

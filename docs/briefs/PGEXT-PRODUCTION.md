@@ -2,7 +2,7 @@
 
 This brief specifies a future production-admission target. It does not establish that the current PoC is accepted, package-ready, or published. Production work requires maintainer approval of the API and exact supported scope.
 
-The [proposed first-production contract](production-contract.md) specifies the concrete carrier, API/registration, supported/rejected shapes, mechanism limits and initial compatibility target for that approval. It remains a proposal; this brief retains the required implementation and verification outcome.
+The [first-production contract](production-contract.md) specifies the selected carrier, API/registration, supported/rejected shapes, mechanism limits and initial compatibility target. This brief retains the required implementation and verification outcome; design selection grants no implementation or package acceptance.
 
 ## 1. Preconditions
 
