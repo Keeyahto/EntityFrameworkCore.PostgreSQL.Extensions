@@ -63,3 +63,4 @@ The package runner copies the supplied package into a fresh isolated local feed,
 - [Compatibility](docs/compatibility.md) records version inputs and the limits of current claims.
 - [Contributing](CONTRIBUTING.md) describes the repository workflow.
 - [Experimental carrier research](docs/experiments/query-carriers.md) retains comparison evidence; it does not supersede the selected implementation contract.
+- [Local preview verification](docs/experiments/package-verification.md) records the exact source/artifact and execution basis.

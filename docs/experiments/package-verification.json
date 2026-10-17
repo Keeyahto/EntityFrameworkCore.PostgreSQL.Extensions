@@ -1,0 +1,291 @@
+{
+  "sourceCommit": "91df7054a936f927e897d87492d00d35250104d9",
+  "packageVersion": "0.1.0-preview.2",
+  "artifacts": [
+    {
+      "file": "EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.2.nupkg",
+      "sha256": "1ad1ba98597478649685232029b9acce6f66cdcc1910237967edbf08b91d0acb",
+      "bytes": 41791,
+      "entries": [
+        "_rels/.rels",
+        "EntityFrameworkCore.PostgreSQL.Extensions.nuspec",
+        "README.md",
+        "lib/net10.0/EntityFrameworkCore.PostgreSQL.Extensions.dll",
+        "lib/net10.0/EntityFrameworkCore.PostgreSQL.Extensions.xml",
+        "[Content_Types].xml",
+        "package/services/metadata/core-properties/nuget.psmdcp"
+      ],
+      "dependencies": {
+        "Microsoft.EntityFrameworkCore.Relational": "[10.0.12, 11.0.0)",
+        "Npgsql": "[10.0.3, 11.0.0)",
+        "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, 11.0.0)"
+      }
+    },
+    {
+      "file": "EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.2.snupkg",
+      "sha256": "8002bb1546984d612d5cf5457fab1b50dc36779775dfcf1d70622317388a86b5",
+      "bytes": 16865,
+      "entries": [
+        "_rels/.rels",
+        "EntityFrameworkCore.PostgreSQL.Extensions.nuspec",
+        "lib/net10.0/EntityFrameworkCore.PostgreSQL.Extensions.pdb",
+        "[Content_Types].xml",
+        "package/services/metadata/core-properties/nuget.psmdcp"
+      ],
+      "dependencies": {
+        "Microsoft.EntityFrameworkCore.Relational": "[10.0.12, 11.0.0)",
+        "Npgsql": "[10.0.3, 11.0.0)",
+        "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, 11.0.0)"
+      }
+    }
+  ],
+  "consumer": {
+    "status": "passed",
+    "packageId": "EntityFrameworkCore.PostgreSQL.Extensions",
+    "packageVersion": "0.1.0-preview.2",
+    "packageSha256": "1ad1ba98597478649685232029b9acce6f66cdcc1910237967edbf08b91d0acb",
+    "cachedPackageSha256": "1ad1ba98597478649685232029b9acce6f66cdcc1910237967edbf08b91d0acb",
+    "packageLibraryDllSha256": "222d226c8bd0985a7e308bc74d1a6010bb900bf15b634a2c6a46c5d6c6592254",
+    "loadedLibraryDllSha256": "222d226c8bd0985a7e308bc74d1a6010bb900bf15b634a2c6a46c5d6c6592254",
+    "consumerChecks": [
+      "registration:add-db-context-factory-pool-repeated",
+      "registration:nodatime-both-orders-native-roundtrip",
+      "row-lock:target-only-compiled-update-and-share-modes",
+      "row-lock:unsupported-predicate-and-missing-registration-no-select",
+      "advisory-lock:server-hashtextextended-seed-zero",
+      "insert-ignore:selected-conflict-unrelated-constraint-tracker-rollback",
+      "clock:single-native-read-utc-microsecond-and-mapped-function",
+      "read-only:write-rejected;capability-probe:compatible-missing-cancelled",
+      "provider:real-postgresql-contract"
+    ],
+    "checks": {
+      "packageMetadata": true,
+      "isolatedWorkspace": true,
+      "exactLocalFeedCopy": true,
+      "restore": true,
+      "build": true,
+      "realPostgreSqlConsumer": true,
+      "freshPackageCacheHash": true,
+      "loadedLibraryHash": true,
+      "workspaceCleanup": "removed"
+    },
+    "failureStage": null,
+    "failureType": null
+  },
+  "reference": {
+    "sdk": "10.0.401",
+    "tfm": "net10.0",
+    "efRelational": "10.0.12",
+    "npgsqlEf": "10.0.3",
+    "npgsql": "10.0.3",
+    "nodaTime": "10.0.3",
+    "postgresql": "16.14",
+    "sqlTarget": "14.0"
+  },
+  "fullSuite": {
+    "total": 84,
+    "passed": 84,
+    "failed": 0,
+    "skipped": 0
+  },
+  "unitSelection": {
+    "total": 4,
+    "passed": 4,
+    "overlapsFullSuite": true
+  },
+  "commands": {
+    "library-build06": {
+      "exitCode": 0,
+      "stdoutSha256": "0529256a4a2fd3e8258363376538e79246bee03e7aba32ae255b362d9497930a",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "library-test05": {
+      "exitCode": 0,
+      "stdoutSha256": "205051639bd20c0cbba924cf54d92a01212a74646969b597e4688f1776f0aa0b",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "library-unit01": {
+      "exitCode": 0,
+      "stdoutSha256": "0915bde93a065529f8449d1ce1388c8f8ea7a2f9d8a6a1871c70ab1231050072",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "library-pack03": {
+      "exitCode": 0,
+      "stdoutSha256": "eef042d46066923385c380a52503df58acdba9ba9320f23b221516ee4a21c348",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "consumer06": {
+      "exitCode": 0,
+      "stdoutSha256": "af1c04b359ce850952452c0691522cff28674d3bee09dc12edc847b4ae7d5cab",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "pdb-inspection01": {
+      "exitCode": 0,
+      "stdoutSha256": "a24354be1cfba210b0a1449ee98b05b006e2aff95e8f7e0845a8860cf39beb66",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "ci": {
+    "id": 39060487330,
+    "sha": "91df7054a936f927e897d87492d00d35250104d9",
+    "status": "completed",
+    "conclusion": "success",
+    "url": "https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions/actions/runs/39060487330",
+    "event": "push",
+    "runAttempt": 1,
+    "jobs": [
+      {
+        "id": 117477273029,
+        "name": "postgres",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 39060487330,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run actions/setup-dotnet@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Run dotnet restore",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Run dotnet build --no-restore --configuration Release",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5
+          },
+          {
+            "name": "Run dotnet test --no-build --configuration Release --logger trx --results-directory artifacts/test-results",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6
+          },
+          {
+            "name": "Run dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --no-build --configuration Release --output artifacts/packages",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 7
+          },
+          {
+            "name": "Verify isolated package consumer",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 8
+          },
+          {
+            "name": "Post Run actions/setup-dotnet@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 15
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 16
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 17
+          }
+        ]
+      },
+      {
+        "id": 117477273222,
+        "name": "windows-unit",
+        "status": "completed",
+        "conclusion": "success",
+        "run_id": 39060487330,
+        "logs_url": null,
+        "steps": [
+          {
+            "name": "Set up job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 1
+          },
+          {
+            "name": "Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 2
+          },
+          {
+            "name": "Run actions/setup-dotnet@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 3
+          },
+          {
+            "name": "Run dotnet restore",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 4
+          },
+          {
+            "name": "Run dotnet build --no-restore --configuration Release",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 5
+          },
+          {
+            "name": "Run dotnet test --no-build --configuration Release --filter Category=Unit --logger trx --results-directory artifacts/unit-results",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 6
+          },
+          {
+            "name": "Post Run actions/setup-dotnet@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 11
+          },
+          {
+            "name": "Post Run actions/checkout@v4",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 12
+          },
+          {
+            "name": "Complete job",
+            "status": "completed",
+            "conclusion": "success",
+            "number": 13
+          }
+        ]
+      }
+    ]
+  },
+  "independentReview": {
+    "status": "FIX_REQUIRED",
+    "findings": [
+      {
+        "id": "F01",
+        "severity": "medium",
+        "requiredProof": "Observed second composite-key INSERT blocked by the first uncommitted transaction, with commit/rollback outcomes and actor cleanup",
+        "status": "repair awaiting fresh evidence"
+      }
+    ]
+  },
+  "publishedToNuGet": false
+}

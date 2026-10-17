@@ -4,13 +4,14 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Mechanisms;
 
 [Collection(PostgreSqlCollection.Name)]
 [Trait("Category", "PostgreSQL")]
 [Trait("MechanismTestCategory", "PostgreSQL")]
-public sealed class InsertIgnoreMechanismTests(PostgreSqlFixture fixture)
+public sealed class InsertIgnoreMechanismTests(PostgreSqlFixture fixture, ITestOutputHelper output)
 {
     [Fact]
     public async Task UsesIdentityAndDatabaseDefaultsWithoutChangingTracker()
@@ -80,37 +81,187 @@ public sealed class InsertIgnoreMechanismTests(PostgreSqlFixture fixture)
         Assert.False(await observer.IdentityDefaults.AnyAsync(row => row.UniqueKey == key));
     }
 
-    [Fact]
-    public async Task UsesCompositeUniqueTargetAtomicallyForConcurrentInsertions()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UsesCompositeUniqueTargetAtomicallyForConcurrentInsertions(bool commitFirst)
     {
         await MechanismDmlDatabase.ResetAsync(fixture.ConnectionString);
-        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var waitingCount = 0;
-        async Task<bool> InsertAsync(string payload)
+        const string left = "north";
+        const string right = "one";
+        await using var first = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        await using var second = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+        await using var firstTransaction = await first.Database.BeginTransactionAsync();
+        await using var secondTransaction = await second.Database.BeginTransactionAsync();
+        using var secondCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        Task<bool>? secondInsert = null;
+
+        try
         {
-            await using var context = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
-            if (Interlocked.Increment(ref waitingCount) == 2)
+            var firstConnection = first.Database.GetDbConnection();
+            var secondConnection = second.Database.GetDbConnection();
+            var firstBackend = await GetBackendPidAsync(firstConnection, firstTransaction.GetDbTransaction());
+            var secondBackend = await GetBackendPidAsync(secondConnection, secondTransaction.GetDbTransaction());
+            Assert.NotEqual(firstBackend, secondBackend);
+
+            var firstInserted = await first.InsertIgnoreAsync(
+                new CompositeUniqueRow { Left = left, Right = right, Payload = "first" },
+                row => new { row.Left, row.Right });
+            Assert.True(firstInserted);
+            Assert.Empty(first.ChangeTracker.Entries());
+            Assert.Same(firstTransaction, first.Database.CurrentTransaction);
+
+            secondInsert = second.InsertIgnoreAsync(
+                new CompositeUniqueRow { Left = left, Right = right, Payload = "second" },
+                row => new { row.Left, row.Right },
+                secondCancellation.Token);
+
+            var observedWait = await WaitForBlockedCompositeInsertAsync(
+                fixture.ConnectionString,
+                secondBackend,
+                firstBackend,
+                TimeSpan.FromSeconds(10));
+            output.WriteLine(
+                $"InsertIgnore composite race observed wait: firstBackend={firstBackend}; secondBackend={secondBackend}; " +
+                $"wait={observedWait.WaitEventType}; blockingPids={string.Join(",", observedWait.BlockingPids)}; " +
+                $"activeQuery={OneLine(observedWait.Query)}");
+
+            // The pending assertion is meaningful only after PostgreSQL reports the exact insert and blocker.
+            Assert.False(secondInsert.IsCompleted,
+                $"The second insert completed despite observed database contention: {observedWait.Query}");
+            Assert.Equal("Lock", observedWait.WaitEventType);
+            Assert.Contains(firstBackend, observedWait.BlockingPids);
+            Assert.Contains("INSERT INTO \"mechanisms\".\"CompositeUnique\"", observedWait.Query, StringComparison.Ordinal);
+            Assert.Contains("ON CONFLICT (\"Left\", \"Right\") DO NOTHING", observedWait.Query, StringComparison.Ordinal);
+
+            if (commitFirst)
             {
-                ready.SetResult();
+                await firstTransaction.CommitAsync();
+            }
+            else
+            {
+                await firstTransaction.RollbackAsync();
             }
 
-            await release.Task;
-            return await context.InsertIgnoreAsync(
-                new CompositeUniqueRow { Left = "north", Right = "one", Payload = payload },
-                row => new { row.Left, row.Right });
+            var secondInserted = await secondInsert.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(!commitFirst, secondInserted);
+            Assert.Empty(second.ChangeTracker.Entries());
+            Assert.Same(secondTransaction, second.Database.CurrentTransaction);
+            await secondTransaction.CommitAsync();
+
+            await using var verification = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
+            var rows = await verification.CompositeUnique.AsNoTracking().ToListAsync();
+            Assert.Single(rows);
+            var expectedPayload = commitFirst ? "first" : "second";
+            Assert.Equal(expectedPayload, rows[0].Payload);
+            output.WriteLine(
+                $"InsertIgnore composite race: firstBackend={firstBackend}; secondBackend={secondBackend}; " +
+                $"firstCommitted={commitFirst}; firstInserted={firstInserted}; secondInserted={secondInserted}; " +
+                $"finalRows={rows.Count}; finalPayload={rows[0].Payload}");
+        }
+        finally
+        {
+            if (secondInsert is { IsCompleted: false })
+            {
+                secondCancellation.Cancel();
+            }
+
+            try
+            {
+                if (secondInsert is not null)
+                {
+                    try
+                    {
+                        _ = await secondInsert;
+                    }
+                    catch (OperationCanceledException) when (secondCancellation.IsCancellationRequested)
+                    {
+                        // Cleanup cancels only an actor left pending after the causal assertion has failed.
+                    }
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (second.Database.CurrentTransaction is not null)
+                    {
+                        await secondTransaction.RollbackAsync();
+                    }
+                }
+                finally
+                {
+                    if (first.Database.CurrentTransaction is not null)
+                    {
+                        await firstTransaction.RollbackAsync();
+                    }
+                }
+            }
+        }
+    }
+
+    private static async Task<int> GetBackendPidAsync(System.Data.Common.DbConnection connection, System.Data.Common.DbTransaction transaction)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT pg_catalog.pg_backend_pid()";
+        return Convert.ToInt32(await command.ExecuteScalarAsync());
+    }
+
+    private static async Task<CompositeInsertWait> WaitForBlockedCompositeInsertAsync(
+        string connectionString,
+        int secondBackend,
+        int firstBackend,
+        TimeSpan timeout)
+    {
+        using var deadline = new CancellationTokenSource(timeout);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync(deadline.Token);
+        string lastState = "no pg_stat_activity row";
+
+        while (!deadline.IsCancellationRequested)
+        {
+            try
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT wait_event_type, query, pg_catalog.pg_blocking_pids(pid)
+                    FROM pg_catalog.pg_stat_activity
+                    WHERE pid = @pid AND state = 'active'
+                    """;
+                command.Parameters.AddWithValue("pid", secondBackend);
+                await using var reader = await command.ExecuteReaderAsync(deadline.Token);
+                if (await reader.ReadAsync(deadline.Token))
+                {
+                    var waitEvent = reader.IsDBNull(0) ? null : reader.GetString(0);
+                    var query = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+                    var blockers = reader.GetFieldValue<int[]>(2);
+                    lastState = $"wait={waitEvent}; blockers={string.Join(",", blockers)}; query={OneLine(query)}";
+                    if (waitEvent is "Lock"
+                        && blockers.Contains(firstBackend)
+                        && query.Contains("INSERT INTO \"mechanisms\".\"CompositeUnique\"", StringComparison.Ordinal)
+                        && query.Contains("ON CONFLICT (\"Left\", \"Right\") DO NOTHING", StringComparison.Ordinal))
+                    {
+                        return new CompositeInsertWait(waitEvent, query, blockers);
+                    }
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(25), deadline.Token);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                break;
+            }
         }
 
-        var first = InsertAsync("first");
-        var second = InsertAsync("second");
-        await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        release.SetResult();
-        var inserted = await Task.WhenAll(first, second);
-
-        Assert.Equal(1, inserted.Count(result => result));
-        await using var verification = MechanismDmlDatabase.CreateContext(fixture.ConnectionString);
-        Assert.Equal(1, await verification.CompositeUnique.CountAsync());
+        throw new TimeoutException(
+            $"Backend {secondBackend} did not show the expected composite INSERT lock wait blocked by backend {firstBackend} " +
+            $"within {timeout}. Last observed activity: {lastState}.");
     }
+
+    private static string OneLine(string value) => value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+    private sealed record CompositeInsertWait(string WaitEventType, string Query, int[] BlockingPids);
 
     [Fact]
     public async Task AppliesMappedValueConverterToDmlParameter()

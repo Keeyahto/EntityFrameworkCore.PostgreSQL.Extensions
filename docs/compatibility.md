@@ -31,3 +31,5 @@ The Npgsql SQL-generation target controls translation. The connected server vers
 The initial evidence target is the exact input set in the table. Do not infer support for other EF Core/Npgsql package revisions, PostgreSQL server patches or majors, additional TFMs, NativeAOT or trimming from the declared dependency intervals, a successful build, or package creation. Because the query generator integration uses provider-internal APIs, changing EF/Npgsql revisions requires targeted build, provider and packed-consumer evidence. Expanding a support claim requires an explicit support decision and evidence for each newly claimed boundary.
 
 References: [architecture](architecture.md), [capability discovery](capabilities.md), [first-production contract](briefs/production-contract.md), [query integration](query-integration.md).
+
+Exact artifact and execution basis: [local preview verification](experiments/package-verification.md).
