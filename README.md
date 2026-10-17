@@ -6,7 +6,7 @@ The repository uses Apache-2.0; see [LICENSE](LICENSE). The upstream repository 
 
 ## Current proof status
 
-Bounded local PostgreSQL checks exercise id-equality root locks, `OrderBy(...).Take(1)`, and synchronous and asynchronous compiled-query forms across the three comparison carriers. Specific tested relational cases in Q05–Q12 reject before issuing a SELECT where the shape is unsupported. Arbitrary unmarked-predicate subqueries and global query filters remain uncharacterized and are outside any production support claim. This evidence does not select a production carrier or admit a public API surface. Remote CI has not been executed, and a local package has not yet been built; detailed verification results belong with change evidence.
+Bounded local PostgreSQL checks exercise id-equality root locks, `OrderBy(...).Take(1)`, and synchronous and asynchronous compiled-query forms across the three comparison carriers. Specific tested relational cases in Q05вЂ“Q12 reject before issuing a SELECT where the shape is unsupported. Arbitrary unmarked-predicate subqueries and global query filters remain uncharacterized and are outside any production support claim. This evidence does not select a production carrier or admit a public API surface. Remote CI has not been executed; local preview artifacts exist, with isolated packed-consumer validation still pending; detailed verification results belong with change evidence.
 
 The query integration code exposes three selectable comparison carriers: `TableAnnotations`, `TranslatorTag`, and `ExpressionTag`. No carrier or public API surface has been selected for production. Current test inputs use .NET SDK 10.0.401, EF Core Relational 10.0.12, Npgsql EF Core 10.0.3 / Npgsql 10.0.3, and a Testcontainers image pinned to PostgreSQL 16.14. Npgsql's configured SQL target is 14; a separate context smoke check configures target 15. These are test inputs, not a supported compatibility pair or range. The integration tests require Docker or a compatible container runtime and do not expose a manually supplied database setting.
 
@@ -47,3 +47,5 @@ The full test command includes PostgreSQL integration tests. A successful `dotne
 - [Query integration](docs/query-integration.md), [PoC plan](docs/poc-plan.md), and [query gates](docs/query-gates.md) describe the current A/B/C carrier comparison and required proof.
 - [Compatibility](docs/compatibility.md) states the verified scope and open evidence gates.
 - [Contribution workflow](CONTRIBUTING.md) gives the standalone setup and commands.
+
+The [experimental comparison and observations](docs/experiments/query-carriers.md) record the exact research scope, evidence and proposed NARROW outcome.
