@@ -2,7 +2,7 @@
 
 Use PostgreSQL primitives through typed EF Core APIs: coordinate concurrent work, insert a row while ignoring one selected unique conflict, read server time and inspect database requirements.
 
-The library ships as one `net10.0` assembly in the `EntityFrameworkCore.PostgreSQL.Extensions` namespace. These guides describe **0.1.0-preview.4**. Public NuGet availability is not established; [Getting started](getting-started.md) explains how to build and install a local package. Preview APIs may change.
+The library ships as one `net10.0` assembly in the `EntityFrameworkCore.PostgreSQL.Extensions` namespace. These guides describe **0.1.0-preview.5**. Public NuGet availability is not established; [Getting started](getting-started.md) explains how to build and install a local package. Preview APIs may change.
 
 <a id="choose-guide"></a>
 ## Choose a guide

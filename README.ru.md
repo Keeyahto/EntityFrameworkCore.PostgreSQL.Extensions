@@ -8,7 +8,7 @@
 - **Данные и транзакции:** атомарная вставка одной строки с пропуском выбранного конфликта, время PostgreSQL и транзакции только для чтения.
 - **Настройка и диагностика:** явная проверка целевой версии SQL, версии сервера и необходимых расширений базы данных.
 
-Один пакет для `net10.0`, одно пространство имён: `EntityFrameworkCore.PostgreSQL.Extensions`. Текущая версия — **0.1.0-preview.4**. Доступность пакета в публичном NuGet не подтверждена; в [начале работы](https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions/blob/develop/docs/ru/getting-started.md) описана локальная установка. API предварительной версии может меняться.
+Один пакет для `net10.0`, одно пространство имён: `EntityFrameworkCore.PostgreSQL.Extensions`. Текущая версия — **0.1.0-preview.5**. Доступность пакета в публичном NuGet не подтверждена; в [начале работы](https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions/blob/develop/docs/ru/getting-started.md) описана локальная установка. API предварительной версии может меняться.
 
 ## Пример
 

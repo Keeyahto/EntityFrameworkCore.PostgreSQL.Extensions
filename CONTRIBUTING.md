@@ -28,7 +28,7 @@ Query changes require the relevant original-expression/model, final SQL, service
 
 ```powershell
 dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --no-build --configuration Release --output artifacts/packages
-pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.4.nupkg
+pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.5.nupkg
 ```
 
 The runner copies the supplied archive into a fresh local feed/cache, restores and builds the tracked consumer template outside the checkout, verifies the package/loaded assembly bytes, and executes against PostgreSQL. It uses a `PackageReference` with no source/project reference. `-EvidenceDirectory` may point to ignored `artifacts/` or an external directory; `-KeepWorkspace` retains the temporary workspace for diagnosis. Keep results in the response/PR and temporary artifacts outside version control.

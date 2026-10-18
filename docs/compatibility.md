@@ -1,6 +1,6 @@
 # Compatibility
 
-These guides describe package **0.1.0-preview.4**, one `net10.0` runtime assembly. The API is a preview and may change. Public NuGet package availability and a stable API commitment have not been established. [Getting started](getting-started.md) uses a locally built package.
+These guides describe package **0.1.0-preview.5**, one `net10.0` runtime assembly. The API is a preview and may change. Public NuGet package availability and a stable API commitment have not been established. [Getting started](getting-started.md) uses a locally built package.
 
 <a id="reference-api"></a>
 ## Reference combination

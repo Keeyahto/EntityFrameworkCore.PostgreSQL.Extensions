@@ -9,4 +9,4 @@
 - Restrict lock queries to the documented root grammar and validate original expressions, mapping, final SQL scope, current transactions, service composition and cached selection bounds.
 - Validate insert-ignore mappings and typed values before opening a connection; preserve selected-conflict, tracking and caller-transaction semantics.
 - Add a typed single server-clock read and strengthen PostgreSQL command/provider guards.
-- Add an isolated local-package consumer and CI verification. Current local preview package version `0.1.0-preview.4` is separate from NuGet publication and stable API support.
+- Add an isolated local-package consumer and CI verification. Current local preview package version `0.1.0-preview.5` is separate from NuGet publication and stable API support.

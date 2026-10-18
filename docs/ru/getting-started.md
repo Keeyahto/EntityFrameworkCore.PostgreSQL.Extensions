@@ -17,7 +17,7 @@ dotnet restore
 dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --configuration Release --output artifacts/packages
 ```
 
-Архив библиотеки называется `EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.4.nupkg`. Создайте приложение в отдельном каталоге. Добавьте в него `Demo.csproj`:
+Архив библиотеки называется `EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.5.nupkg`. Создайте приложение в отдельном каталоге. Добавьте в него `Demo.csproj`:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -28,7 +28,7 @@ dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --configuration Releas
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="EntityFrameworkCore.PostgreSQL.Extensions" Version="0.1.0-preview.4" />
+    <PackageReference Include="EntityFrameworkCore.PostgreSQL.Extensions" Version="0.1.0-preview.5" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
   </ItemGroup>
