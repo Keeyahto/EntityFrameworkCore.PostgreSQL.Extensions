@@ -64,7 +64,14 @@ Markdown remains readable on GitHub. The README uses absolute repository URLs so
 
 The `Documentation` workflow builds both locales on pull requests and pushes to `develop`. It also supports a manual run with `publish` disabled by default. It does not deploy from pull requests or ordinary pushes.
 
-After the documentation change is integrated and deployment is authorized, select **GitHub Actions** as the repository's Pages source, then run `Documentation` on `develop` with `publish` enabled. The workflow uploads `docs/.vitepress/dist` and deploys through the `github-pages` environment. The configured project base path matches the repository name. Update it deliberately if using a custom domain or renamed repository. Site publication and NuGet publication are independent actions.
+To set up the project site:
+
+1. Merge the documentation change into the default branch, `develop`. GitHub exposes the manual workflow trigger after the workflow file exists on the default branch.
+2. Open the repository's **Settings → Pages**. Under **Build and deployment → Source**, select **GitHub Actions**. This initial setup requires repository administration access.
+3. Open **Actions → Documentation → Run workflow**. Select `develop`, enable `publish`, and run the workflow. The caller needs write access. Publication is accepted only from `develop`.
+4. Wait for both `build` and `deploy` to succeed. Use the URL shown by the `github-pages` deployment. With the repository's current name and the standard GitHub domain, English is served at `https://keeyahto.github.io/EntityFrameworkCore.PostgreSQL.Extensions/` and Russian at `https://keeyahto.github.io/EntityFrameworkCore.PostgreSQL.Extensions/ru/`.
+
+The workflow uploads `docs/.vitepress/dist`, checks the enabled Pages configuration and deploys through the `github-pages` environment. The supplied `GITHUB_TOKEN` and job permissions handle deployment; no personal access token, custom secret or paid hosting is needed for this public repository. Initial Pages enablement is done in repository settings. Custom domains are optional; update the VitePress base deliberately if adopting one or renaming the repository. Subsequent updates are published by repeating the manual run on `develop`. Site publication and NuGet publication are independent actions.
 
 ## Changes and repository hygiene
 
