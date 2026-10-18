@@ -1,0 +1,199 @@
+using System.Data;
+using EntityFrameworkCore.PostgreSQL.Extensions.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.EntityFrameworkCore.Metadata;
+using Xunit;
+
+namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Mechanisms;
+
+[Collection(PostgreSqlCollection.Name)]
+[Trait("Category", "PostgreSQL")]
+[Trait("MechanismTestCategory", "PostgreSQL")]
+public sealed class InsertIgnoreDefaultSchemaTests(PostgreSqlFixture fixture)
+{
+    private const string DefaultSchema = "insert_ignore_default_schema";
+
+    [Fact]
+    public async Task DefaultSchemaTableSupportsSelectedConflictAndTargetsMappedSchema()
+    {
+        await ResetAsync();
+        await using var context = CreateContext();
+        var entityType = context.Model.FindEntityType(typeof(DefaultSchemaInsertIgnoreRow))!;
+
+        Assert.Equal(DefaultSchema, entityType.GetSchema());
+        Assert.Null(entityType.GetViewName());
+        Assert.Equal(DefaultSchema, entityType.GetViewSchema());
+
+        Assert.True(await context.InsertIgnoreAsync(
+            new DefaultSchemaInsertIgnoreRow { Key = "same-key", Payload = "first-payload" },
+            row => row.Key));
+        Assert.False(await context.InsertIgnoreAsync(
+            new DefaultSchemaInsertIgnoreRow { Key = "same-key", Payload = "ignored-payload" },
+            row => row.Key));
+
+        var stored = await context.DefaultSchemaRows.AsNoTracking().SingleAsync(row => row.Key == "same-key");
+        Assert.Equal("first-payload", stored.Payload);
+        Assert.Equal(0, await context.Database.SqlQueryRaw<int>(
+            "SELECT COUNT(*)::int AS \"Value\" FROM public.\"DefaultSchemaRows\"").SingleAsync());
+    }
+
+    [Fact]
+    public async Task DefaultSchemaTableBorrowsTransactionAndRollbackLeavesTrackerUnchanged()
+    {
+        await ResetAsync();
+        await using var context = CreateContext();
+        await using var observer = CreateContext();
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        const string key = "rolled-back-key";
+
+        Assert.True(await context.InsertIgnoreAsync(
+            new DefaultSchemaInsertIgnoreRow { Key = key, Payload = "transactional-payload" },
+            row => row.Key));
+
+        Assert.Same(transaction, context.Database.CurrentTransaction);
+        Assert.Empty(context.ChangeTracker.Entries());
+        Assert.True(await context.DefaultSchemaRows.AnyAsync(row => row.Key == key));
+
+        await transaction.RollbackAsync();
+
+        Assert.Empty(context.ChangeTracker.Entries());
+        Assert.False(await observer.DefaultSchemaRows.AnyAsync(row => row.Key == key));
+    }
+
+    [Fact]
+    public async Task ViewMappingIsRejectedBeforeOpeningConnection()
+    {
+        var connectionOpenCounter = new ConnectionOpenCounter();
+        await using var context = CreateContext(connectionOpenCounter);
+        var entityType = context.Model.FindEntityType(typeof(ViewOnlyInsertIgnoreRow))!;
+        Assert.Equal("ViewOnlyRows", entityType.GetViewName());
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new ViewOnlyInsertIgnoreRow { Key = "view" },
+            row => row.Key));
+
+        Assert.Contains("requires one mapped table", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, connectionOpenCounter.OpeningCount);
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+    }
+
+    [Fact]
+    public async Task TableAndViewMappingIsRejectedBeforeOpeningConnection()
+    {
+        var connectionOpenCounter = new ConnectionOpenCounter();
+        await using var context = CreateContext(connectionOpenCounter);
+        var entityType = context.Model.FindEntityType(typeof(TableAndViewInsertIgnoreRow))!;
+        Assert.Equal("TableAndViewRows", entityType.GetTableName());
+        Assert.Equal("TableAndViewRows", entityType.GetViewName());
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => context.InsertIgnoreAsync(
+            new TableAndViewInsertIgnoreRow { Key = "table-and-view" },
+            row => row.Key));
+
+        Assert.Contains("requires one mapped table", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, connectionOpenCounter.OpeningCount);
+        Assert.Equal(ConnectionState.Closed, context.Database.GetDbConnection().State);
+    }
+
+    private async Task ResetAsync()
+    {
+        await using var context = CreateContext();
+        await context.Database.ExecuteSqlRawAsync($"""
+            CREATE SCHEMA IF NOT EXISTS "{DefaultSchema}";
+            DROP TABLE IF EXISTS "{DefaultSchema}"."DefaultSchemaRows";
+            DROP TABLE IF EXISTS public."DefaultSchemaRows";
+            CREATE TABLE "{DefaultSchema}"."DefaultSchemaRows" (
+                "Id" integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                "Key" text NOT NULL UNIQUE,
+                "Payload" text NOT NULL);
+            CREATE TABLE public."DefaultSchemaRows" (
+                "Id" integer GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+                "Key" text NOT NULL UNIQUE,
+                "Payload" text NOT NULL);
+            """);
+    }
+
+    private DefaultSchemaInsertIgnoreContext CreateContext(params IInterceptor[] interceptors)
+    {
+        var options = new DbContextOptionsBuilder<DefaultSchemaInsertIgnoreContext>()
+            .UseProviderTestWarnings()
+            .UseNpgsql(fixture.ConnectionString)
+            .AddInterceptors(interceptors)
+            .Options;
+        return new DefaultSchemaInsertIgnoreContext(options);
+    }
+}
+
+internal sealed class ConnectionOpenCounter : DbConnectionInterceptor
+{
+    private int _openingCount;
+
+    public int OpeningCount => Volatile.Read(ref _openingCount);
+
+    public override InterceptionResult ConnectionOpening(
+        System.Data.Common.DbConnection connection,
+        ConnectionEventData eventData,
+        InterceptionResult result)
+    {
+        Interlocked.Increment(ref _openingCount);
+        return result;
+    }
+
+    public override ValueTask<InterceptionResult> ConnectionOpeningAsync(
+        System.Data.Common.DbConnection connection,
+        ConnectionEventData eventData,
+        InterceptionResult result,
+        CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref _openingCount);
+        return ValueTask.FromResult(result);
+    }
+}
+
+internal sealed class DefaultSchemaInsertIgnoreContext(DbContextOptions<DefaultSchemaInsertIgnoreContext> options)
+    : DbContext(options)
+{
+    public DbSet<DefaultSchemaInsertIgnoreRow> DefaultSchemaRows => Set<DefaultSchemaInsertIgnoreRow>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.HasDefaultSchema("insert_ignore_default_schema");
+        modelBuilder.Entity<DefaultSchemaInsertIgnoreRow>(entity =>
+        {
+            entity.ToTable("DefaultSchemaRows");
+            entity.HasKey(row => row.Id);
+            entity.HasIndex(row => row.Key).IsUnique();
+        });
+        modelBuilder.Entity<ViewOnlyInsertIgnoreRow>(entity =>
+        {
+            entity.ToView("ViewOnlyRows");
+            entity.HasKey(row => row.Id);
+        });
+        modelBuilder.Entity<TableAndViewInsertIgnoreRow>(entity =>
+        {
+            entity.ToTable("TableAndViewRows");
+            entity.ToView("TableAndViewRows");
+            entity.HasKey(row => row.Id);
+        });
+    }
+}
+
+internal sealed class DefaultSchemaInsertIgnoreRow
+{
+    public int Id { get; set; }
+    public string Key { get; set; } = string.Empty;
+    public string Payload { get; set; } = string.Empty;
+}
+
+internal sealed class ViewOnlyInsertIgnoreRow
+{
+    public int Id { get; set; }
+    public string Key { get; set; } = string.Empty;
+}
+
+internal sealed class TableAndViewInsertIgnoreRow
+{
+    public int Id { get; set; }
+    public string Key { get; set; } = string.Empty;
+}

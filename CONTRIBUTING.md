@@ -10,7 +10,7 @@ dotnet build --no-restore --configuration Release
 dotnet test --no-build --configuration Release --logger trx
 dotnet test --no-build --configuration Release --filter Category=Unit --logger trx
 dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --no-build --configuration Release --output artifacts/packages
-pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.2.nupkg
+pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.3.nupkg
 ```
 
 The integration fixture uses the pinned PostgreSQL 16.14 Testcontainers image. The package runner inspects the package, copies its exact bytes into a fresh local feed and package cache, restores and builds the tracked consumer template in a temporary workspace outside the checkout, then runs it against real PostgreSQL. The consumer has a `PackageReference` and no project or source reference. An evidence directory may be supplied with `-EvidenceDirectory`; `-KeepWorkspace` retains the temporary workspace for diagnosis.

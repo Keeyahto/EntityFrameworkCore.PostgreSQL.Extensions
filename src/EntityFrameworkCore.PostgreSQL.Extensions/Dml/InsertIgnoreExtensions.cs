@@ -130,7 +130,7 @@ public static class InsertIgnoreExtensions
         }
 
         var table = entityType.GetTableName();
-        if (table is null || entityType.GetViewName() is not null || entityType.GetViewSchema() is not null)
+        if (table is null || entityType.GetViewName() is not null)
         {
             throw new NotSupportedException("InsertIgnoreAsync requires one mapped table.");
         }

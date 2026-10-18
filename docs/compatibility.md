@@ -1,6 +1,6 @@
 # Compatibility and evidence
 
-This page separates the selected reference inputs, package dependency metadata and verified consumer support. The implementation targets one `net10.0` runtime assembly. The project is versioned `0.1.0-preview.2`; package ID ownership and NuGet publication remain release decisions. No published package or verified compatibility range is established here.
+This page separates the selected reference inputs, package dependency metadata and verified consumer support. The implementation targets one `net10.0` runtime assembly. The project is versioned `0.1.0-preview.3`; package ID ownership and NuGet publication remain release decisions. No published package or verified compatibility range is established here.
 
 ## Reference inputs
 
@@ -14,7 +14,7 @@ This page separates the selected reference inputs, package dependency metadata a
 | Npgsql | `10.0.3` | Exact central test/build input and package dependency minimum |
 | PostgreSQL server | `16.14`, from `postgres:16-alpine@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20` | Pinned reference fixture; it does not imply support for other patches or majors |
 | Npgsql SQL-generation target | `14.0` | The reference translation target used against the PostgreSQL 16.14 fixture; SQL target and server version are separate axes |
-| Library package metadata | `EntityFrameworkCore.PostgreSQL.Extensions`, `0.1.0-preview.2` | Project identity/version inputs; neither publication nor stable API status follows from them |
+| Library package metadata | `EntityFrameworkCore.PostgreSQL.Extensions`, `0.1.0-preview.3` | Project identity/version inputs; neither publication nor stable API status follows from them |
 
 The package project declares EF Core Relational dependency range `[10.0.12,11.0.0)` and Npgsql provider and Npgsql ranges `[10.0.3,11.0.0)`. These are the current `.nuspec` dependency intervals, not evidence that every 10.x patch has been verified. Exact package inputs for builds and tests remain the versions above. A consumer's selected package versions and runtime behavior must be assessed against the evidence for that exact set.
 
