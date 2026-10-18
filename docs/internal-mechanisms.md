@@ -1,33 +1,100 @@
-# Internal mechanisms
+# Data and transactions
 
-This reference describes the current command, metadata-aware DML, clock, and compatibility mechanisms. The approved [first-production contract](briefs/production-contract.md) owns the selected package target, row-lock query contract, registration boundary, and explicit exclusions. This file records the behavior implemented by the source.
+This guide covers atomic insert-ignore, PostgreSQL wall-clock access and read-only transactions. These operations use the Npgsql-backed `DbContext` or its `Database` facade and can be used without `UsePostgreSqlExtensions()`. Snippets use the model from [Getting started](getting-started.md).
 
-## Shared execution boundary
+<a id="insert-api"></a>
+## Insert a row and ignore one unique conflict
 
-Command, DML, and clock operations require the Npgsql EF Core provider and an `NpgsqlConnection`. When an EF transaction is present, the operation uses it only when its underlying `NpgsqlTransaction` belongs to that same connection. These helpers create or commit no transaction and retry no command. Caller cancellation is passed to asynchronous operations and PostgreSQL/provider exceptions retain their native types and details. The capability probe has its own typed error outcomes, described in [PostgreSQL capability probe](capabilities.md).
+```csharp
+var candidate = new Document { Id = 1, Payload = "created" };
+var inserted = await db.InsertIgnoreAsync(candidate, x => x.Id, ct);
+```
 
-Advisory-lock and read-only-transaction operations require an existing caller-owned EF transaction. Insert-ignore and the clock read can run with or without one. Insert-ignore and the clock read pair EF's connection open/close calls around execution; a connection already open before the call remains open after its matching close. Provider, transaction, mapping, selector, SQL, and parameter checks for insert-ignore are completed before it opens the connection.
+The method sends one PostgreSQL `INSERT ... ON CONFLICT (...) DO NOTHING`. It returns `true` for one inserted row and `false` when the selected unique conflict prevented insertion. A conflicting row keeps its existing values. Violations of other constraints propagate as native PostgreSQL errors.
 
-## Transaction-scoped commands
+The public signature is:
 
-`AdvisoryLockExtensions.AcquireTransactionAdvisoryLockAsync` exposes three key forms: text, `long`, and two `int` values. Text keys use the exact PostgreSQL expression `hashtextextended(@key, 0)` through EF interpolated execution; the other forms use PostgreSQL's native one-`bigint` and two-`integer` advisory-lock spaces. Values are parameters. Each overload validates the Npgsql provider, connection, and attached current transaction before executing SQL. The lock belongs to the caller's transaction and is released by PostgreSQL at transaction completion.
+```csharp
+Task<bool> InsertIgnoreAsync<TEntity>(this DbContext context,
+    TEntity entity, Expression<Func<TEntity, object?>> conflictTarget,
+    CancellationToken cancellationToken = default)
+    where TEntity : class;
+```
 
-`SetTransactionReadOnlyAsync` executes `SET TRANSACTION READ ONLY` under the current attached transaction. PostgreSQL enforces its valid transaction timing and write restrictions. The helper does not change a session default or transaction isolation level. Both command families forward cancellation and preserve native PostgreSQL errors; they have no fallback or retry behavior.
+The selector names a direct mapped property, or an anonymous composite such as `x => new { x.Code, x.Region }` for a model with those properties. Its columns must match a mapped primary key, alternate key or unfiltered unique index. Partial/expression indexes, computed selectors, duplicate members and arbitrary constructors are unsupported. PostgreSQL's native nullable-unique semantics apply: NULL does not become application-level equality.
 
-## Metadata-aware insert-ignore
+<a id="mapping-api"></a>
+### Mapping, defaults and tracking
 
-`InsertIgnoreExtensions.InsertIgnoreAsync<TEntity>` inserts one mapped entity row and returns `true` when one row was inserted or `false` when the selected conflict target caused `DO NOTHING`. Conflicts on other constraints and other native failures propagate. The method does not attach the entity, alter the change tracker, call `SaveChanges`, or return generated values.
+The entity must map to one ordinary table, including a table in the model's default schema. Identifiers come from EF metadata and use provider quoting; values are parameters with relational type mappings and converters. Views, owned entities, inheritance, complex/shadow properties, table/view fragments and ambiguous shared-table mappings are rejected. Mapping, selector, SQL and parameter preparation finish before the method opens a connection.
 
-The entity must map to one table through one non-owned, non-inherited CLR entity mapping. Owned entities, inheritance, complex properties, table/view fragments, views, shadow properties, and another entity sharing the table are rejected. A conflict selector can name a direct mapped scalar property or an anonymous composite containing direct mapped scalar properties. Arbitrary constructors, computed expressions, duplicate members, and non-property targets are rejected. The selected columns must match a mapped primary/alternate key or an unfiltered unique index. Partial and expression indexes are unsupported.
+EF's configured sentinel marks an omitted value for a generated/defaulted property. PostgreSQL supplies the omitted value. An explicit NULL can be sent only when it differs from that sentinel. A nullable property whose sentinel is NULL cannot express both omission and explicit NULL through this entity API. Unsupported generation, including explicit identity-always values and database-generated update values, is rejected. Custom defaults and converters need provider validation for their exact mapping.
 
-Mapping, selector, conflict-target, generated-value, SQL, and parameter preparation happen before connection open. Identifiers are quoted with Npgsql's identifier rules. Values are sent as parameters created by each EF relational type mapping, preserving configured store types and value converters. Database-generated sentinel values are omitted so PostgreSQL can supply defaults; explicit values that the implementation cannot safely insert, including identity-always values and database-generated update values, are rejected. EF sentinel semantics govern omission, so explicit `NULL` is sent only when it is distinguishable from the property's sentinel. Client-side value generation that requires `SaveChanges` is unsupported. There is no hidden transaction: an attached caller transaction is borrowed; otherwise PostgreSQL executes the single insert statement in native autocommit.
+`InsertIgnoreAsync` does not attach the supplied instance, change tracking state, call `SaveChanges`, run client key generators or SaveChanges interceptors, or assign/return generated values. Query separately if you need the stored entity. An already tracked entity remains governed by normal EF behavior; a later `SaveChanges` is separate work. Bulk insertion, `DO UPDATE`, general upsert and `RETURNING` are outside this API.
 
-## PostgreSQL clock
+<a id="atomicity-api"></a>
+### Transaction and atomicity
 
-`DatabaseClock.ClockTimestamp()` is mapped by `MapClockTimestamp()` to `pg_catalog.clock_timestamp()`. Calling the method directly in client code throws `NotSupportedException`; it has no client-clock fallback. The mapping represents PostgreSQL's wall clock at function evaluation and does not itself guarantee one evaluation across several query expressions.
+With a current attached EF transaction, the statement participates in that transaction. Without one, PostgreSQL executes it as a single autocommit statement. The helper creates no transaction and performs no check-then-insert. Concurrent inserts are resolved by PostgreSQL's unique constraint, and a competing statement can wait for an uncommitted insert.
 
-`ReadClockTimestampAsync(DatabaseFacade, CancellationToken)` performs one native scalar read of `pg_catalog.clock_timestamp()`. It returns a UTC `DateTime` at PostgreSQL timestamp precision and rejects a non-UTC provider result. It borrows an attached current transaction when present and creates none otherwise. The provider and transaction are validated before connection open; the EF open/close pair preserves prior open state. Cancellation is forwarded and failures propagate after connection cleanup.
+To include insertion in a larger unit of work, create the transaction yourself:
 
-## Boundaries
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var inserted = await db.InsertIgnoreAsync(
+    new Document { Id = 1, Payload = "created" }, x => x.Id, ct);
+await transaction.CommitAsync(ct);
+```
 
-These mechanisms provide no application authorization, business recovery, retry policy, host startup/readiness lifecycle, automatic SQL-target selection, extension installation, generic DML, or `RETURNING` behavior. The caller owns transaction creation, commit/rollback, and action on compatibility reports. The selected scope and exclusions are defined in the [first-production contract](briefs/production-contract.md).
+<a id="clock-api"></a>
+## PostgreSQL wall-clock time
+
+For one server value, use the typed database method:
+
+```csharp
+DateTime sampledAt = await db.Database.ReadClockTimestampAsync(ct);
+```
+
+It reads `pg_catalog.clock_timestamp()` once and returns a UTC `DateTime` at PostgreSQL's microsecond precision. It borrows an attached current transaction when present and can run standalone otherwise. It balances the connection ownership acquired by the call, preserving an already-open connection. Cancellation and provider errors propagate. No client clock is substituted.
+
+Reuse the returned value explicitly when several application values need the same sample. A sample does not establish equivalence to a compound server-side lease predicate/update or define TTL, interval arithmetic or overflow policy.
+
+<a id="clock-mapping-api"></a>
+### Use the clock in a translated query
+
+Register the mapping in `OnModelCreating`:
+
+```csharp
+modelBuilder.MapClockTimestamp();
+```
+
+Then use it in a normal translated query, for example a projection over a populated table:
+
+```csharp
+DateTime observedAt = await db.Documents
+    .Select(x => DatabaseClock.ClockTimestamp())
+    .FirstAsync(ct);
+```
+
+`DatabaseClock.ClockTimestamp()` maps to PostgreSQL's volatile wall clock. Its value is taken when the function is evaluated. PostgreSQL `now()` instead represents transaction start time. Repeated calls can return different values inside one statement; the mapping does not promise a single shared evaluation. Direct invocation in client code throws `NotSupportedException`.
+
+This projection is an ordinary query without a row-lock marker. Row-lock projection restrictions still apply. Clock predicates/`ExecuteUpdate`, `DateTimeOffset` conversions, shared-sample server arithmetic, arbitrary CTE/update compositions and overflow equivalence are outside the verified usage described here.
+
+<a id="read-only-api"></a>
+## Read-only transactions
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+await db.Database.SetTransactionReadOnlyAsync(ct);
+var documents = await db.Documents.AsNoTracking().ToListAsync(ct);
+await transaction.CommitAsync(ct);
+```
+
+Call the method immediately after beginning the transaction, before queries that constrain PostgreSQL's transaction settings. It issues `SET TRANSACTION READ ONLY` under the attached current EF transaction. PostgreSQL enforces valid timing and write restrictions. The method changes no session default or isolation level and cannot repair an aborted transaction.
+
+<a id="ownership-api"></a>
+## Shared ownership and failure behavior
+
+All operations require the Npgsql EF provider and an `NpgsqlConnection`. A borrowed transaction must be an `NpgsqlTransaction` attached to that connection. Insert-ignore and the clock read open and close through EF, preserving connection ownership. Advisory locks and the read-only command require an existing transaction.
+
+The caller controls commit/rollback and recovery after cancellation or native errors. The library introduces no automatic retry or domain error classification. For configuration failures and probe outcomes, see [Configuration and diagnostics](capabilities.md).

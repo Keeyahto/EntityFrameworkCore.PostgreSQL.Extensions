@@ -1,37 +1,80 @@
-# PostgreSQL capability probe
+# Configuration and diagnostics
 
-`PostgreSqlCapabilityProbe.CheckAsync` is an explicit, read-only probe for one Npgsql-backed `DbContext` and its current database connection. The caller supplies the extension requirements to compare. The probe does not infer application needs, create extensions, choose provider configuration, or manage host startup/readiness. The approved [first-production contract](briefs/production-contract.md) defines the selected target and exclusions.
+Configure each `DbContext` with the Npgsql EF Core provider. The library uses one namespace, `EntityFrameworkCore.PostgreSQL.Extensions`. This guide explains registration, database requirement checks and common failure causes.
 
-## API and report
+<a id="registration-api"></a>
+## Register the operations you use
+
+For row-lock queries:
 
 ```csharp
-Task<PostgreSqlCapabilityReport> PostgreSqlCapabilityProbe.CheckAsync(
-    DbContext context,
-    IEnumerable<PostgreSqlExtensionRequirement> requirements,
-    CancellationToken cancellationToken = default)
+options.UseNpgsql(connectionString,
+    npgsql => npgsql.UsePostgreSqlExtensions());
 ```
 
-Each `PostgreSqlExtensionRequirement` has a `Name` and optional exact `RequiredVersion`. Names must be non-empty and unique; invalid input throws `ArgumentException`. Each installed extension is reported as `Name` and `Version`.
+`UsePostgreSqlExtensions(this NpgsqlDbContextOptionsBuilder)` returns the same builder. Registration is parameterless and idempotent. Use it in the Npgsql options callback for `AddDbContext`, `AddDbContextFactory` or pooled-context registration as appropriate to your application. Options and query state remain isolated across contexts and pools.
 
-The report contains:
+The row-lock integration keeps Npgsql's native translator and replaces the query SQL-generator factory. Competing generator or translator replacements before or after registration are unsupported and fail explicitly. Manually composed `UseInternalServiceProvider` setups are unsupported. Additive plugins such as Npgsql NodaTime can coexist in either registration order; see the reference versions in [Compatibility](compatibility.md).
 
-- `Outcome`: `Compatible`, `Incompatible`, or `Indeterminate`;
-- `SqlTargetVersion`: Npgsql's effective SQL-generation target, including its provider default when no explicit target is configured;
-- `ActualServerVersion`: the version reported by the opened `NpgsqlConnection`;
-- `InstalledExtensions`: extension names and versions installed in the current database;
-- `UnmetRequirements`: caller-declared requirements not observed at the requested exact version;
-- optional `FailureType`: the exception type recorded when the probe cannot read facts.
+Advisory locks, insert-ignore, the typed clock read, read-only command and capability probe need no row-lock registration. Clock expressions separately require `modelBuilder.MapClockTimestamp()` in `OnModelCreating`; see [Data and transactions](internal-mechanisms.md#clock-mapping-api).
 
-`Compatible` means the configured SQL target does not exceed the observed server version and all supplied extension requirements match. `Incompatible` means the provider or connection is unsupported, the SQL target exceeds the server version, or a supplied extension requirement is unmet. `Indeterminate` means a database/provider operation failed with a database or invalid-operation exception before reliable facts could be established. The outcome describes this probe and its inputs; it is not a package support-range declaration, deployment certification, or host readiness decision.
+<a id="target-api"></a>
+## SQL target and connected server
 
-## Observation and lifecycle
+Npgsql's effective SQL-generation target controls translation. The server version observed through the connection is a separate fact. You may select the target through the native Npgsql configuration; the reference examples use `SetPostgresVersion(14, 0)` against PostgreSQL `16.14`.
 
-The probe reads the effective SQL target from the Npgsql EF options and the actual version from `NpgsqlConnection.PostgreSqlVersion`. It reads installed extensions from `pg_catalog.pg_extension` (`extname` and `extversion`), then compares only caller-supplied requirements. It does not treat available-but-uninstalled extensions as installed. An installed extension record does not prove that a particular role can call its functions or that an Npgsql plugin is configured.
+The library does not automatically change the SQL target when it connects, install extensions or probe on each query. An application decides which databases, roles and failover targets need checking and when it is safe to begin work.
 
-The method uses the context's current transaction when present and requires its underlying Npgsql transaction to be attached to the observed connection before issuing the catalog query. It opens the EF connection for the probe and pairs that acquisition with a close, preserving a connection that was already open. It creates no transaction and performs no database mutation. Cancellation propagates. Provider/connection mismatches return `Incompatible`; database and invalid-operation failures return `Indeterminate` with a failure type and without exposing exception messages. Other argument errors propagate.
+<a id="probe-api"></a>
+## Inspect database requirements
 
-The SQL-generation target and actual server version remain separate facts. The target controls Npgsql SQL generation; the probe does not change it in response to the server version. A successful report covers only the observed connection/database at that time. It does not describe other databases, roles, replicas, or future failover targets.
+```csharp
+var report = await PostgreSqlCapabilityProbe.CheckAsync(
+    db, Array.Empty<PostgreSqlExtensionRequirement>(), ct);
+Console.WriteLine(report.Outcome);
+```
 
-## Caller responsibility
+An empty requirements list checks the provider/target/server relationship and reports the installed extension inventory. If your application requires an extension, supply it explicitly:
 
-The caller decides when to invoke the probe, which requirements to declare, and how to handle each outcome. There is no automatic registration hook, startup gate, readiness policy, retry policy, per-query probing, or automatic-target bootstrap in this API. Extension installation and host lifecycle remain outside the library. See the [approved first-production contract](briefs/production-contract.md) for the complete selected scope and exclusions.
+```csharp
+var requirements = new[]
+{
+    new PostgreSqlExtensionRequirement("pg_trgm")
+};
+var report = await PostgreSqlCapabilityProbe.CheckAsync(db, requirements, ct);
+```
+
+`RequiredVersion` is an optional exact version string, for example `new PostgreSqlExtensionRequirement("pg_trgm", "1.6")`. This is a requirement supplied by the caller, with no claim that it is installed. Names must be non-empty and unique; invalid requirements throw `ArgumentException`.
+
+<a id="outcomes-api"></a>
+### Interpret the report
+
+| Outcome | Meaning |
+|---|---|
+| `Compatible` | Effective SQL target does not exceed the observed server version, and every supplied extension requirement matches |
+| `Incompatible` | Unsupported provider/connection, SQL target above the server version, or an unmet extension requirement |
+| `Indeterminate` | A database/provider operation failed with a database or invalid-operation exception before reliable facts were established |
+
+The report contains `Outcome`, `SqlTargetVersion`, `ActualServerVersion`, `InstalledExtensions`, `UnmetRequirements` and optional `FailureType`. An installed extension has `Name` and `Version`; a requirement has `Name` and optional exact `RequiredVersion`. Failure details expose an exception type, without the exception message. Cancellation propagates, and other argument errors propagate.
+
+The read-only probe reads `pg_catalog.pg_extension`. Only installed extensions count; available but uninstalled extensions do not. An inventory record does not prove the current role can call every extension function or that the corresponding Npgsql plugin is configured. A successful report describes one database connection at that time and does not certify all query capabilities, other roles/replicas or future failover targets.
+
+The probe borrows a correctly attached current transaction when present, and balances its EF connection open/close acquisition. It creates no transaction or database objects. You decide when to call it, which requirements to declare and what each outcome means for application readiness. `Indeterminate` does not establish readiness.
+
+<a id="troubleshooting-api"></a>
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| A marked query fails translation or reports missing registration | Add `UsePostgreSqlExtensions()` to the options used by that exact context |
+| A query is rejected before SELECT | Compare the complete expression and model with the [supported grammar](query-integration.md#query-shapes-api); inspect global filters and eager navigations |
+| A lock/read-only command reports no current transaction | Begin an explicit EF transaction and execute on its context/connection |
+| A service-composition error occurs | Remove conflicting generator/translator replacements and manual internal service-provider composition |
+| `55P03` with `NoWait` | Another transaction holds an incompatible lock; choose the application's response deliberately |
+| A wait is canceled or PostgreSQL aborts a transaction | Handle the native error and complete/replace the transaction according to application policy |
+| Insert-ignore rejects a selector or mapping | Select a mapped unfiltered unique key and check [mapping/default limits](internal-mechanisms.md#mapping-api) |
+| The probe is `Incompatible` | Inspect target/server versions and `UnmetRequirements` |
+| The probe is `Indeterminate` | Inspect `FailureType`, database availability and connection/transaction state; redact secrets in diagnostics |
+| Calling `ClockTimestamp()` throws in client code | Use the mapped function inside an EF query or `ReadClockTimestampAsync` for a direct value |
+
+Do not turn a rejected locking query into an unlocked fallback. Native PostgreSQL errors may be wrapped by EF/Npgsql; inspect the native inner exception and SQLSTATE when appropriate. The library adds no retry or uncertain-commit classification.
