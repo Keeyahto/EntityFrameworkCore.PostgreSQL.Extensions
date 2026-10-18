@@ -1,7 +1,10 @@
-# Library engineering instructions
+# Agent instructions
 
-Read [README](README.md), [architecture](docs/architecture.md), [query contract](docs/query-integration.md), [PoC](docs/poc-plan.md), [compatibility](docs/compatibility.md) and [contribution workflow](CONTRIBUTING.md) for the actual change. These local documents and source/tests are sufficient for work in this repository.
+Work on the user's requested scope. Read the [README](README.md) and the relevant current guide before editing.
 
-Keep one runtime package/assembly, native EF-facing typed APIs and four independent mechanisms. Native support is preferred when semantically sufficient. The [first-production contract](docs/briefs/production-contract.md) selects the expression-interceptor design, finite public scope and initial evidence target. Implementation, provider evidence, packed-consumer acceptance and publication are distinct outcomes; design approval supplies none of those results.
-
-Do not implement generic ORM/UoW, universal SQL AST, operation registry, hidden transaction/retry or string-based lock rewriting. Preserve no-silent-unlock, exact target occurrence, borrowed transactions, immutable query state and native SQLSTATE. Changes require relevant positive/negative tests and documentation of actual behavior. Keep private consumer governance, data and credentials outside this repository. Package identity and publication require maintainer decisions.
+- For code, dependencies, tests or packaging, follow [Code changes](.agents/code.md).
+- For documentation, examples or the website, follow [Documentation changes](.agents/documentation.md).
+- Code changes that affect usage or behavior must update the English and Russian documentation in the same change.
+- Keep the library independent of private consumers. Preserve caller-owned transactions, explicit failures and native PostgreSQL behavior.
+- Add only task deliverables to Git. Unrequested reports, evidence bundles, review transcripts, plans, logs and agent notes stay outside version control. Use Git history for superseded documents.
+- Run the relevant checks and report actual results and remaining limitations in the response. Publishing packages, deploying the site and changing release policy require explicit user authorization.

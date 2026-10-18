@@ -1,58 +1,119 @@
-# Query integration contract
+# Locking
 
-The selected design is a typed row-lock marker, an expression interceptor, a reserved internal intent tag and structural Npgsql SQL generation. Npgsql's native query translator remains active. The [first-production contract](briefs/production-contract.md) owns exact public signatures, registration, the finite query/model scope and compatibility target. Actual production admission requires its provider and isolated-package evidence. Experimental comparisons belong to [research evidence](experiments/query-carriers.md).
+Use a row lock to protect existing mapped rows while your transaction reads and changes them. Use a transaction-scoped advisory lock to coordinate cooperating operations by a key, including work for which no row exists yet. Both forms require the caller's current explicit EF transaction and are released by PostgreSQL when that transaction completes.
 
-## 1. Lock-request invariant
+Examples use the model from [Getting started](getting-started.md). Register row-lock support as shown in [Configuration](capabilities.md#registration-api); advisory locks need only the Npgsql provider.
 
-A marked query has exactly two legitimate outcomes: PostgreSQL locks the intended root occurrence under the requested strength/wait mode and the caller's transaction, or execution fails explicitly before returning data as locked. Missing configuration, unsupported transformations, query-cache reuse and cancellation preserve this invariant.
+<a id="row-locks-api"></a>
+## Row locks
 
-The initial scope identifies one ordinary mapped root table occurrence. General JOIN/projection/multi-target locking and ordered key-set protocols are outside the selected scope. An entity type or the first table alias alone does not establish occurrence identity. The library accepts no raw user alias/table name as a target.
-
-## 2. Query pipeline
-
-```text
-typed IQueryable marker
-  -> original expression and finalized-model validation
-  -> immutable internal intent/tag
-  -> native Npgsql translation
-  -> final SELECT/table/scope validation
-  -> structural FOR ... OF quoted-generated-alias clause
-  -> command-time fulfillment/service/transaction/bound validation
-  -> PostgreSQL execution in caller-owned transaction
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var document = await db.Documents
+    .Where(x => x.Id == 1)
+    .ForUpdate(LockWait.NoWait)
+    .SingleAsync(ct);
+document.Payload = "changed";
+await db.SaveChangesAsync(ct);
+await transaction.CommitAsync(ct);
 ```
 
-The public extension constructs a call to its own method definition. Without the extension, this marker remains untranslatable. Internal tags carry typed intent; they grant no public authorization and reject spoofing/collisions, including ordinary user comments containing reserved protocol material. Preserve ordinary constant user tags.
+This requests `FOR UPDATE OF` the generated root alias. If another transaction holds an incompatible lock, `NoWait` raises PostgreSQL's lock-not-available error. A query with a lock marker either obtains the requested lock on the validated root occurrence or fails explicitly. It cannot successfully return data as locked after silently dropping the request.
 
-Strength and wait options are structural constants, including in compiled queries. Repeated requests, whether identical or conflicting, are rejected. Intent is immutable and query-specific; no mutable provider-global or AsyncLocal state controls correctness.
+<a id="modes-api"></a>
+### Strength and wait mode
 
-## 3. Original expression and model
+| API or value | PostgreSQL behavior |
+|---|---|
+| `ForUpdate()` / `ForUpdate(wait)` | `FOR UPDATE`; strongest row-lock mode |
+| `ForShare()` / `ForShare(wait)` | `FOR SHARE`; permits compatible shared readers |
+| `WithRowLock(LockStrength.NoKeyUpdate, wait)` | `FOR NO KEY UPDATE` |
+| `WithRowLock(LockStrength.KeyShare, wait)` | `FOR KEY SHARE` |
+| `LockWait.Wait` | Wait for an incompatible holder; the default for parameterless calls |
+| `LockWait.NoWait` | Fail immediately on an incompatible holder |
+| `LockWait.SkipLocked` | Omit rows that cannot be locked immediately |
 
-Validate the exact ordinary entity-query root, method identities/overloads, argument structure, direct mapped property identity and closed grammar in the first-production contract. An operator name alone is insufficient. Equality/AND predicates admit scalar mapped properties against constants or extracted EF query parameters. For C# numeric promotion, built-in equality admits the methodless, non-lifted `Convert` from `short` to `int` around exactly one direct mapped root member and, when present, the same conversion around a short constant or extracted short query parameter on the value side. The conversion is validated as a pair and retained in the original expression. Other casts, computed members, method conversions, arbitrary predicate subqueries, navigation/member chains, method predicates and client evaluation are rejected. Validate terminal predicate overloads too.
+`WithRowLock` also accepts `LockStrength.Update` and `LockStrength.Share`. Its strength and wait arguments are both required. Strength/wait values must be structural constants, including in compiled queries. Runtime parameters that select lock keywords in a compiled query are rejected. Repeated markers are rejected even when their modes agree.
 
-Parameter binding remains native to EF Core and Npgsql. An integer parameter outside the range of a mapped `smallint` may raise the same provider overflow as the equivalent unmarked query; the row-lock extension does not narrow the value.
+`SkipLocked` is useful only when omitted rows are acceptable. It provides no completeness or fairness guarantee. Use PostgreSQL's [row-lock compatibility rules](https://www.postgresql.org/docs/16/explicit-locking.html#LOCKING-ROWS) when choosing a strength.
 
-Validate finalized relational mapping: one direct table and unambiguous entity occurrence; reject inherited/split/shared/view/function/raw roots, unsupported complex mappings, eager-loading transformations and all declared global filters, including named filters. A root-looking final SELECT does not prove an admissible original expression.
+<a id="query-shapes-api"></a>
+### Supported queries and mappings
 
-EF extracts ordinary captured values and may parameterize a literal Take(1) before the compilation interceptor. Preserve exact private selection-bound identity through intent and fulfillment. Validate a parameterized bound equals one at actual execution; reject Take(2) through a warmed cache. Compiled constants and native First/Single limit composition require their own structural and execution oracles. No expression evaluator or arbitrary predicate compilation is introduced.
+The accepted grammar is closed. Each condition below must hold for the complete query:
 
-## 4. Final SQL scope
+| Part | Accepted form |
+|---|---|
+| Root | One ordinary entity mapped directly to one unambiguous table occurrence; materialize the entity itself |
+| Tracking | Tracked or `AsNoTracking` entity queries |
+| Predicate | Direct mapped scalar properties compared by equality with constants or extracted EF parameters; combine equalities with `AND` |
+| Key | Primary, natural or composite predicates under the same rule; nullable and converted properties retain their explicitly verified mapping constraints |
+| Marker position | Before or after an admitted `Where` |
+| Terminal | `Single`, `SingleOrDefault`, `First`, `FirstOrDefault`, their async counterparts, or sync/async entity enumeration |
+| Bounded ordered selection | Direct mapped scalar `OrderBy`/`OrderByDescending`, optional `ThenBy`/`ThenByDescending`, followed by one `Take(1)`; no offset |
+| Reuse | `EF.CompileQuery` and `EF.CompileAsyncQuery` with constant lock options; ordinary cache reuse |
+| Query tags | Ordinary constant user tags; reserved protocol material and dynamic lock-query tags are rejected |
 
-Render the lock structurally within the relevant SELECT using its validated table occurrence and quoted generated alias. Nested SELECTs, pruning, joins, set operations, raw/function tables, offsets, grouping and unadmitted projections must not redirect it. Independently inspect the final relevant relational tree, column ownership and selection bound. A valid original marker does not exempt the final tree from validation.
+C# promotes `short` equality operands to `int`. The validator admits the built-in methodless, non-lifted `short`-to-`int` conversion around one direct mapped member, and the matching conversion around a short constant/parameter when present. It validates the pair and preserves the expression. Other casts, computed members and user-defined conversions are rejected. An integer parameter outside the mapped `smallint` range can still raise native provider overflow; values are not narrowed by the library.
 
-PostgreSQL locking without OF can affect more tables than intended; emit the exact root alias. ORDER BY at READ COMMITTED gives no universal lock-acquisition order or post-wait ranking guarantee. SKIP LOCKED can omit occupied rows. Preserve native terminal multiplicity/empty semantics; Single may inspect/lock multiple rows before reporting multiplicity.
+The following forms are rejected before the requested SELECT is issued:
 
-## 5. Execution and service composition
+- JOIN, LEFT JOIN, self-join and multiple targets; projections, including identity `Select`;
+- `Include`, split queries, eager navigations, global filters including named filters;
+- navigation/member chains, predicate subqueries, methods, `OR`, inequalities and client evaluation;
+- raw SQL/function roots, views, inheritance, owned/complex, shared or split mappings;
+- nested locking/pushdown, `Skip`, arbitrary or repeated `Take`, `Distinct`, grouping, aggregates, `Any`/`Count` and set operations;
+- repeated lock markers, dynamic options and other unknown shapes.
 
-Query construction and ToQueryString may precede a transaction. Actual execution requires the current explicit EF transaction reference on the same command connection. A correctly enlisted borrowed transaction is eligible; ambient TransactionScope alone is unsupported. The library begins, commits, retries and releases no caller transaction.
+A familiar operator name does not admit every overload or expression using it. Custom mappings outside the verified cases need their own provider validation. Ordered multirow array/key-set locking is outside the current scope.
 
-The generator produces one matching request/fulfillment record. The command interceptor validates this record, effective service identities, exact transaction/connection and selection-bound parameters on every sync/async execution, including cached/compiled queries. It never rewrites CommandText. Paired markers alone are insufficient evidence of real PostgreSQL behavior.
+<a id="selection-api"></a>
+### Selection and concurrency
 
-Repeated registration preserves one configuration. Reject conflicting generator/translator replacements before registration, during repeated registration and after it. Manual internal service-provider composition is unsupported for this plugin. Contexts/factories/pools preserve options/cache isolation; additive Npgsql translations remain functional. Ordinary unmarked queries preserve native SQL/results.
+For an ordered single-row selection:
 
-Native PostgreSQL errors remain recognizable through native EF/Npgsql wrappers: lock conflict, serialization failure, deadlock, cancellation and connection termination are technical outcomes. The extension supplies no domain error, retry policy or uncertain-commit classification.
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var documents = await db.Documents
+    .OrderBy(x => x.Id)
+    .Take(1)
+    .ForUpdate(LockWait.SkipLocked)
+    .ToListAsync(ct);
+await transaction.CommitAsync(ct);
+```
 
-## 6. Evidence and maintenance
+The result can be empty. At READ COMMITTED, `ORDER BY` supplies no universal lock-acquisition order or guarantee that the returned row still ranks first after a lock wait and concurrent key changes. `Single` preserves native multiplicity behavior and can lock inspected rows before reporting that several rows matched. A unique predicate and the duration/order of application work remain the caller's responsibility.
 
-Required evidence combines structural SQL assertions with real two-session observations: exact target/non-target locks, strength/wait compatibility, release on commit/rollback, cancellation, borrowed transactions, missing configuration, replaced services, cache/compiled/factory/pool reuse and unsupported forms. Negative shape tests run inside a valid transaction, assert the intended cause and observe zero issued commands. Retain native SQL controls and native-feature-off behavior as independent oracles.
+<a id="transaction-api"></a>
+### Transaction, cache and errors
 
-The provider-internal generator factory remains version-sensitive. Keep EF1001 suppression local to that adapter, record dependency/server sets and test the built package in an isolated consumer. Source compilation implies no compatibility range, platform or mapping support. [Query gates](query-gates.md) and [compatibility](compatibility.md) retain their evidence boundaries.
+Query construction and `ToQueryString()` may happen before a transaction begins. Actual execution requires the current explicit EF transaction on the same command connection. A correctly enlisted borrowed transaction through EF `UseTransaction` is eligible; ambient `TransactionScope` alone is unsupported. The library never begins, commits, rolls back or retries a transaction for you.
+
+Validation runs across original expression/model, final relational scope and command execution. It checks active services, request fulfillment and the actual `Take(1)` parameter even on cached or compiled execution. Cache reuse cannot turn a later `Take(2)` into an accepted request. Internal tags are implementation details and grant no authorization; forged/reserved text is rejected even in ordinary user tags.
+
+Cancellation propagates. PostgreSQL errors such as lock conflict (`55P03`), serialization failure (`40001`), deadlock (`40P01`) and backend termination (`57P01`) remain recognizable through native EF/Npgsql wrappers. The caller decides how to handle the failure and the transaction. See [Troubleshooting](capabilities.md#troubleshooting-api).
+
+<a id="advisory-api"></a>
+## Advisory coordination
+
+An advisory lock represents an application-defined key. Only operations that acquire the same advisory lock participate in that protocol; unrelated SQL is not protected automatically.
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync("document:1", ct);
+var inserted = await db.InsertIgnoreAsync(
+    new Document { Id = 1, Payload = "created" }, x => x.Id, ct);
+await transaction.CommitAsync(ct);
+```
+
+Choose a key convention shared by all cooperating callers. The lock can serialize work before a corresponding row exists. The supported overloads return `Task`:
+
+```csharp
+await db.Database.AcquireTransactionAdvisoryLockAsync("document:1", ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync(123L, ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync(7, 123, ct);
+```
+
+Each line above is an independent overload example to execute inside a caller-owned transaction. Text keys use `pg_advisory_xact_lock(hashtextextended(key, 0))` on PostgreSQL. Hashing can collide and shares the bigint key space with the `long` overload. PostgreSQL's two-int space is separate from its bigint space. Avoid assuming that text, bigint and two-int keys with similar spelling identify the same lock.
+
+These are blocking, transaction-scoped operations. Waiting can be canceled; PostgreSQL releases the lock at transaction completion. No session-scoped fallback, try-lock API, automatic retry or collision handling is provided.

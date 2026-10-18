@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reorganize documentation into matching English/Russian guides, add a local VitePress site and an optional manual GitHub Pages workflow, and consolidate agent instructions for code and documentation.
 - Fix insert-ignore mapping for ordinary tables when the model has a default schema; reject actual view mappings before opening the connection.
 - Admit C#'s paired methodless `short`-to-`int` conversions around a directly mapped member and short value in built-in equality predicates; retain rejection of other conversions and computed members.
 - Select the expression-interceptor row-lock implementation with parameterless `UsePostgreSqlExtensions()` registration; remove the experimental carrier selector and alternate translation paths.
