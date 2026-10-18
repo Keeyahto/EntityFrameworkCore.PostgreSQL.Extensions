@@ -32,6 +32,7 @@ internal static class Program
             await RunNodaTimeCompositionAsync(connectionString);
             await RunProviderSmokeAsync(connectionString);
             await RunDefaultSchemaInsertIgnoreAsync(connectionString);
+            await RunSmallIntegerRowLockAsync(connectionString);
 
             var assembly = typeof(InsertIgnoreExtensions).Assembly;
             var assemblyPath = Path.GetFullPath(assembly.Location);
@@ -308,6 +309,65 @@ internal static class Program
             "The caller rollback did not remove the default-schema row.");
         Require(context.ChangeTracker.Entries().Count() == 0, "The rolled-back insert changed tracking state.");
         Checks.Add("insert-ignore:default-schema-selected-conflict-payload-rollback-tracker");
+    }
+
+    private static async Task RunSmallIntegerRowLockAsync(string connectionString)
+    {
+        const string schema = "package_consumer_short_key";
+        var observer = new SelectObserver();
+        var options = new DbContextOptionsBuilder<SmallIntegerLockContext>()
+            .UseNpgsql(connectionString, npgsql => npgsql.UsePostgreSqlExtensions())
+            .AddInterceptors(observer)
+            .Options;
+
+        await using var context = new SmallIntegerLockContext(options);
+        await context.Database.ExecuteSqlRawAsync($"""
+            CREATE SCHEMA IF NOT EXISTS "{schema}";
+            DROP TABLE IF EXISTS "{schema}"."ShortKeyRows";
+            CREATE TABLE "{schema}"."ShortKeyRows" (
+                "ShortKey" smallint PRIMARY KEY,
+                "Payload" text NOT NULL);
+            INSERT INTO "{schema}"."ShortKeyRows" ("ShortKey", "Payload") VALUES (1, 'target'), (2, 'other');
+            """);
+
+        await using (var transaction = await context.Database.BeginTransactionAsync())
+        {
+            var promotedKey = 1;
+            var selected = await context.Rows.Where(row => row.ShortKey == promotedKey).ForUpdate().SingleAsync();
+            Require(selected.ShortKey == 1, "The promoted short-key predicate selected a different row.");
+            Require(observer.Commands.Count == 1
+                && observer.Commands[0].Contains("FOR UPDATE OF", StringComparison.Ordinal),
+                "The short-key query did not execute the structural row lock.");
+            Require(!await TryNativeShortKeyLockAsync(connectionString, 1),
+                "PostgreSQL allowed another transaction to lock the selected short-key row.");
+            Require(await TryNativeShortKeyLockAsync(connectionString, 2),
+                "The short-key row lock affected a non-target row.");
+            await transaction.RollbackAsync();
+        }
+
+        Checks.Add("row-lock:promoted-smallint-key-target-only");
+    }
+
+    private static async Task<bool> TryNativeShortKeyLockAsync(string connectionString, short key)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = "SELECT 1 FROM \"package_consumer_short_key\".\"ShortKeyRows\" WHERE \"ShortKey\" = @key FOR UPDATE NOWAIT";
+            command.Parameters.AddWithValue("key", key);
+            var selected = await command.ExecuteScalarAsync();
+            await transaction.CommitAsync();
+            return selected is not null;
+        }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.LockNotAvailable)
+        {
+            await transaction.RollbackAsync();
+            return false;
+        }
     }
 
     private static async Task VerifyRowLockScopeAsync(
@@ -606,6 +666,27 @@ internal sealed class DefaultSchemaInsertIgnoreRow
 {
     public int Id { get; set; }
     public string Key { get; set; } = string.Empty;
+    public string Payload { get; set; } = string.Empty;
+}
+
+internal sealed class SmallIntegerLockContext(DbContextOptions<SmallIntegerLockContext> options) : DbContext(options)
+{
+    public DbSet<SmallIntegerLockRow> Rows => Set<SmallIntegerLockRow>();
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<SmallIntegerLockRow>(entity =>
+        {
+            entity.ToTable("ShortKeyRows", "package_consumer_short_key");
+            entity.HasKey(row => row.ShortKey);
+            entity.Property(row => row.ShortKey).HasColumnType("smallint");
+        });
+    }
+}
+
+internal sealed class SmallIntegerLockRow
+{
+    public short ShortKey { get; set; }
     public string Payload { get; set; } = string.Empty;
 }
 

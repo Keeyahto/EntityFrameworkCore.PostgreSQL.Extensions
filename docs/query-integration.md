@@ -27,7 +27,9 @@ Strength and wait options are structural constants, including in compiled querie
 
 ## 3. Original expression and model
 
-Validate the exact ordinary entity-query root, method identities/overloads, argument structure, direct mapped property identity and closed grammar in the first-production contract. An operator name alone is insufficient. Equality/AND predicates admit scalar mapped properties against constants or extracted EF query parameters; arbitrary predicate subqueries, navigation/member chains, method predicates and client evaluation are rejected. Validate terminal predicate overloads too.
+Validate the exact ordinary entity-query root, method identities/overloads, argument structure, direct mapped property identity and closed grammar in the first-production contract. An operator name alone is insufficient. Equality/AND predicates admit scalar mapped properties against constants or extracted EF query parameters. For C# numeric promotion, built-in equality admits the methodless, non-lifted `Convert` from `short` to `int` around exactly one direct mapped root member and, when present, the same conversion around a short constant or extracted short query parameter on the value side. The conversion is validated as a pair and retained in the original expression. Other casts, computed members, method conversions, arbitrary predicate subqueries, navigation/member chains, method predicates and client evaluation are rejected. Validate terminal predicate overloads too.
+
+Parameter binding remains native to EF Core and Npgsql. An integer parameter outside the range of a mapped `smallint` may raise the same provider overflow as the equivalent unmarked query; the row-lock extension does not narrow the value.
 
 Validate finalized relational mapping: one direct table and unambiguous entity occurrence; reject inherited/split/shared/view/function/raw roots, unsupported complex mappings, eager-loading transformations and all declared global filters, including named filters. A root-looking final SELECT does not prove an admissible original expression.
 

@@ -271,16 +271,27 @@ internal sealed class RowLockQueryValidation
             throw RowLockQueryErrors.Rejected("predicates may contain only direct mapped scalar equality and AND");
         }
 
-        var member = equality.Left as MemberExpression;
-        var value = equality.Right;
-        if (member is null || !IsSupportedValue(value))
+        var leftIsMember = TryReadPredicateMember(equality.Left, parameter, out var member, out var promotedShort);
+        var allowPromotedShortValue = promotedShort && equality.Method is null;
+        Expression value = equality.Right;
+        if (!leftIsMember || !IsSupportedValue(value, allowPromotedShortValue))
         {
-            member = equality.Right as MemberExpression;
+            if (!TryReadPredicateMember(equality.Right, parameter, out member, out promotedShort))
+            {
+                throw RowLockQueryErrors.Rejected("equality must compare a direct root scalar member with a constant or query parameter");
+            }
+
             value = equality.Left;
+            allowPromotedShortValue = promotedShort && equality.Method is null;
         }
 
-        if (member?.Expression != parameter
-            || !IsSupportedValue(value)
+        if (promotedShort && equality.Method is not null)
+        {
+            throw RowLockQueryErrors.Rejected("short-to-int member promotion requires the built-in equality operator");
+        }
+
+        if (member.Expression != parameter
+            || !IsSupportedValue(value, allowPromotedShortValue)
             || member.Member is not (PropertyInfo or FieldInfo))
         {
             throw RowLockQueryErrors.Rejected("equality must compare a direct root scalar member with a constant or query parameter");
@@ -295,8 +306,62 @@ internal sealed class RowLockQueryValidation
         }
     }
 
-    private static bool IsSupportedValue(Expression expression)
-        => expression is ConstantExpression || expression is QueryParameterExpression;
+    private static bool TryReadPredicateMember(
+        Expression expression,
+        ParameterExpression parameter,
+        out MemberExpression member,
+        out bool promotedShort)
+    {
+        if (expression is MemberExpression { Expression: ParameterExpression root } directMember
+            && root == parameter)
+        {
+            member = directMember;
+            promotedShort = false;
+            return true;
+        }
+
+        if (expression is UnaryExpression
+            {
+                NodeType: ExpressionType.Convert,
+                Method: null,
+                Type: var targetType,
+                IsLifted: false,
+                Operand: MemberExpression { Type: var sourceType, Expression: ParameterExpression convertedRoot } convertedMember
+            }
+            && convertedRoot == parameter
+            && sourceType == typeof(short)
+            && targetType == typeof(int))
+        {
+            member = convertedMember;
+            promotedShort = true;
+            return true;
+        }
+
+        member = null!;
+        promotedShort = false;
+        return false;
+    }
+
+    private static bool IsSupportedValue(Expression expression, bool allowPromotedShortValue = false)
+    {
+        if (expression is ConstantExpression or QueryParameterExpression)
+        {
+            return true;
+        }
+
+        return allowPromotedShortValue
+            && expression is UnaryExpression
+            {
+                NodeType: ExpressionType.Convert,
+                Method: null,
+                Type: var targetType,
+                IsLifted: false,
+                Operand: { Type: var sourceType } convertedValue
+            }
+            && sourceType == typeof(short)
+            && targetType == typeof(int)
+            && convertedValue is ConstantExpression or QueryParameterExpression;
+    }
 
     private static bool ValidEqualityOperator(BinaryExpression equality, Type memberType)
     {

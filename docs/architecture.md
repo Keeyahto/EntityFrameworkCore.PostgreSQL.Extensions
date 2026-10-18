@@ -19,7 +19,7 @@ This repository develops one PostgreSQL-specific EF Core/Npgsql library. The fou
 
 ## B. Package и размещение
 
-The public repository is independently buildable and contains one runtime project and one test project. It uses Apache-2.0; its upstream is `https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions`. The project declares package ID `EntityFrameworkCore.PostgreSQL.Extensions` and version `0.1.0-preview.3`; NuGet ownership/availability and publication remain release decisions. Keep one packable project and one public assembly; do not add microprojects for conceptual layers. Use internal feature components and expose only the EF-facing API. A separate query-plugin package requires demonstrated provider-internal or plugin compatibility need.
+The public repository is independently buildable and contains one runtime project and one test project. It uses Apache-2.0; its upstream is `https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions`. The project declares package ID `EntityFrameworkCore.PostgreSQL.Extensions` and version `0.1.0-preview.4`; NuGet ownership/availability and publication remain release decisions. Keep one packable project and one public assembly; do not add microprojects for conceptual layers. Use internal feature components and expose only the EF-facing API. A separate query-plugin package requires demonstrated provider-internal or plugin compatibility need.
 
 CI, build/test commands, README, contribution process, changelog and compatibility limits are maintained in this checkout. Library source/package evidence and each downstream consumer update have separate change records; two repositories do not form an atomic transaction.
 

@@ -2,7 +2,7 @@
 
 A preview PostgreSQL extension package for EF Core and Npgsql. The current implementation provides typed row locking, transaction-scoped advisory locks, atomic single-row insert-ignore, PostgreSQL clock access and mapping, a read-only transaction command, and a caller-invoked capability probe. It is one `net10.0` runtime assembly in the `EntityFrameworkCore.PostgreSQL.Extensions` namespace.
 
-The project declares package ID `EntityFrameworkCore.PostgreSQL.Extensions` and version `0.1.0-preview.3`. NuGet publication and package-ID ownership are unresolved; this checkout does not establish a published package or a verified consumer compatibility range. The repository uses Apache-2.0; see [LICENSE](LICENSE).
+The project declares package ID `EntityFrameworkCore.PostgreSQL.Extensions` and version `0.1.0-preview.4`. NuGet publication and package-ID ownership are unresolved; this checkout does not establish a published package or a verified consumer compatibility range. The repository uses Apache-2.0; see [LICENSE](LICENSE).
 
 ## Row locking
 
@@ -51,7 +51,7 @@ dotnet restore
 dotnet build --no-restore --configuration Release
 dotnet test --no-build --configuration Release --logger trx
 dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --no-build --configuration Release --output artifacts/packages
-pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.3.nupkg
+pwsh ./scripts/Test-Package.ps1 -PackagePath ./artifacts/packages/EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.4.nupkg
 ```
 
 The package runner copies the supplied package into a fresh isolated local feed, restores and builds a consumer without a project/source reference, then runs that consumer against real PostgreSQL. Keep actual command outcomes with the change evidence; they are not inferred from this documentation or from configured CI.
