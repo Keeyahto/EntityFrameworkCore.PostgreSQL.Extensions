@@ -1,6 +1,6 @@
 # Compatibility
 
-These guides describe package **0.1.0-preview.5**, one `net10.0` runtime assembly. The API is a preview and may change. Public NuGet package availability and a stable API commitment have not been established. [Getting started](getting-started.md) uses a locally built package.
+These guides describe package **0.1.0-preview.6**, one `net10.0` runtime assembly. The API is a preview and may change. Public NuGet package availability and a stable API commitment have not been established. [Getting started](getting-started.md) uses a locally built package.
 
 <a id="reference-api"></a>
 ## Reference combination
@@ -33,7 +33,7 @@ The row-lock SQL generator uses version-sensitive provider internals. Updating E
 
 | Family | Current scope |
 |---|---|
-| [Locking](query-integration.md) | Closed root-entity grammar and transaction-scoped advisory keys; no general JOIN/projection or ordered multirow/key-set protocol |
+| [Locking](query-integration.md) | Closed root-entity grammar, complete ordered UUID sets and transaction-scoped advisory keys; general JOIN/projection remains outside the lock grammar |
 | [Data and transactions](internal-mechanisms.md) | One-row selected-key insert-ignore, clock mapping/typed read and read-only command with documented mapping and transaction limits |
 | [Configuration and diagnostics](capabilities.md) | Explicit read-only database requirement probe; application owns readiness and target selection |
 

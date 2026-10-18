@@ -8,7 +8,7 @@ Typed PostgreSQL operations for Entity Framework Core and Npgsql:
 - **Data and transactions:** atomic single-row insert-ignore, PostgreSQL wall-clock access and read-only transactions.
 - **Configuration and diagnostics:** an explicit probe of the configured SQL target, server version and required database extensions.
 
-One `net10.0` package, one namespace: `EntityFrameworkCore.PostgreSQL.Extensions`. The current version is **0.1.0-preview.5**. Public NuGet availability is not established; [getting started](https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions/blob/develop/docs/getting-started.md) explains local package installation. Preview APIs may change.
+One `net10.0` package, one namespace: `EntityFrameworkCore.PostgreSQL.Extensions`. The current version is **0.1.0-preview.6**. Public NuGet availability is not established; [getting started](https://github.com/Keeyahto/EntityFrameworkCore.PostgreSQL.Extensions/blob/develop/docs/getting-started.md) explains local package installation. Preview APIs may change.
 
 ## Example
 

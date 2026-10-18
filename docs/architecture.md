@@ -36,6 +36,8 @@ The command interceptor checks matching intent/fulfillment, actual services, att
 
 EF may extract a literal `Take(1)` into a parameter before compilation interception. The private bound identity must survive translation, and its value must be one at execution. Original-expression validation and a final root-looking SELECT are both needed to prevent widened or redirected locking. Query cache, factories, pools and provider service composition preserve this behavior.
 
+Complete UUID-set intent carries the primary-key column and optional Guid ordering prefix. The final SELECT must retain the exact ascending root-column order, one UUID membership predicate and no limit. Native Npgsql translation supplies membership SQL. Caller-owned immutable keys and actual contention observations support the bounded ordering protocol; absent rows receive no predicate lock.
+
 The provider generator seam is version-sensitive. Keep EF1001 suppression local to its adapter. Competing translator/generator replacements and manual internal service-provider composition fail explicitly. Additive plugins remain functional; ordinary unmarked queries preserve native SQL/results.
 
 <a id="execution-design"></a>
@@ -46,6 +48,8 @@ Operations require the Npgsql EF provider and connection. An existing transactio
 Connection acquisitions are balanced through EF; helpers preserve previously open connections. The caller owns transaction begin/commit/rollback, cancellation policy, retries and recovery. PostgreSQL and provider errors propagate with their native SQLSTATEs and wrappers. No application permission, lifecycle, revision, uncertain-commit or host-readiness policy enters the library.
 
 Insert-ignore resolves metadata and typed values before opening the connection, uses native atomic conflict handling and leaves tracking untouched. Clock mapping preserves volatile evaluation semantics. Advisory text hashing remains server-side. The probe observes configured SQL target and actual server/installed-extension facts independently and never reconfigures the provider.
+
+The expiry read uses one materialized server-clock sample and parameterized whole-millisecond interval arithmetic. Its literal timestamp cap preserves the representable .NET boundary independently of provider infinity conversions. DateTime and DateTimeOffset clock mappings share the same volatile PostgreSQL function; separate expression occurrences retain separate evaluations.
 
 <a id="maintenance-design"></a>
 ## Maintenance boundaries

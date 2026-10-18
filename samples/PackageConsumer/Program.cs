@@ -10,7 +10,7 @@ using NodaTime;
 using Npgsql;
 using Testcontainers.PostgreSql;
 
-internal static class Program
+internal static partial class Program
 {
     private const string ImageReference = "postgres:16-alpine@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20";
     private const string ResultPrefix = "PGEXT_PACKAGE_CONSUMER_RESULT:";
@@ -33,6 +33,7 @@ internal static class Program
             await RunProviderSmokeAsync(connectionString);
             await RunDefaultSchemaInsertIgnoreAsync(connectionString);
             await RunSmallIntegerRowLockAsync(connectionString);
+            await RunOrderedSetAndExpiryAsync(connectionString);
 
             var assembly = typeof(InsertIgnoreExtensions).Assembly;
             var assemblyPath = Path.GetFullPath(assembly.Location);
@@ -620,6 +621,7 @@ internal sealed class SmokeContext(DbContextOptions<SmokeContext> options) : DbC
 {
     public DbSet<SmokeRecord> Records => Set<SmokeRecord>();
     public DbSet<PluginRecord> PluginRecords => Set<PluginRecord>();
+    public DbSet<UuidRecord> UuidRecords => Set<UuidRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -642,6 +644,11 @@ internal sealed class SmokeContext(DbContextOptions<SmokeContext> options) : DbC
         });
 
         modelBuilder.MapClockTimestamp();
+        modelBuilder.Entity<UuidRecord>(entity =>
+        {
+            entity.ToTable("UuidRecords", "package_consumer");
+            entity.HasKey(row => row.Id);
+        });
     }
 }
 

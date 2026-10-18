@@ -16,19 +16,29 @@ internal static class RowLockQueryErrors
 internal sealed class RowLockQueryValidation
 {
     private static readonly HashSet<MethodInfo> QueryMethods = CreateQueryMethods();
+    private static readonly MethodInfo EnumerableContainsMethod = typeof(Enumerable).GetMethods(BindingFlags.Public | BindingFlags.Static)
+        .Single(method => method.Name == nameof(Enumerable.Contains)
+            && method.IsGenericMethodDefinition
+            && method.GetGenericArguments().Length == 1
+            && method.GetParameters().Length == 2
+            && method.GetParameters()[0].ParameterType.IsGenericType
+            && method.GetParameters()[0].ParameterType.GetGenericTypeDefinition() == typeof(IEnumerable<>));
     private readonly List<LambdaExpression> _predicates = new();
     private readonly List<LambdaExpression> _orderings = new();
+    private readonly List<string> _orderingOperators = new();
     private readonly List<string> _outerToInnerOperators = new();
     private int _takeCount;
     private int _terminalCount;
+    private int _uuidMembershipCount;
     private string? _takeParameterName;
     private bool _hasTake;
+    private string? _orderedSetPrefixColumn;
+    private string? _orderedSetKeyColumn;
 
     public static LockQueryIntent Validate(Expression expression, LockRequest request, DbContext context)
     {
         var validation = new RowLockQueryValidation();
         var root = validation.ReadChain(expression);
-        validation.ValidateOrderingAndTakePlacement();
         var entityType = root.EntityType;
         validation.ValidateModel(entityType, context.Model);
         foreach (var predicate in validation._predicates)
@@ -41,9 +51,22 @@ internal sealed class RowLockQueryValidation
             validation.ValidateOrdering(ordering, entityType);
         }
 
-        if (validation._orderings.Count > 0 && validation._takeCount != 1)
+        if (validation._uuidMembershipCount > 1)
         {
-            throw RowLockQueryErrors.Rejected("ordering is supported only with one Take(1)");
+            throw RowLockQueryErrors.Rejected("only one UUID-array membership predicate is supported");
+        }
+
+        if (validation._uuidMembershipCount == 1)
+        {
+            validation.ValidateOrderedSet(request, entityType);
+        }
+        else
+        {
+            validation.ValidateOrderingAndTakePlacement();
+            if (validation._orderings.Count > 0 && validation._takeCount != 1)
+            {
+                throw RowLockQueryErrors.Rejected("ordering is supported only with one Take(1)");
+            }
         }
 
         var tableName = entityType.GetTableName()
@@ -55,7 +78,9 @@ internal sealed class RowLockQueryValidation
             tableName,
             entityType.GetSchema(),
             validation._takeParameterName,
-            validation._hasTake);
+            validation._hasTake,
+            validation._orderedSetPrefixColumn,
+            validation._orderedSetKeyColumn);
     }
 
     private EntityQueryRootExpression ReadChain(Expression expression)
@@ -102,6 +127,7 @@ internal sealed class RowLockQueryValidation
         else if (declaringType == typeof(Queryable) && IsOrdering(name))
         {
             _orderings.Add(ReadLambda(args[1]));
+            _orderingOperators.Add(name);
         }
         else if (declaringType == typeof(Queryable) && name == nameof(Queryable.Take))
         {
@@ -169,6 +195,131 @@ internal sealed class RowLockQueryValidation
         {
             throw RowLockQueryErrors.Rejected("the single Take(1) must follow the admitted ordering chain");
         }
+    }
+
+    private void ValidateOrderedSet(LockRequest request, IEntityType entityType)
+    {
+        if (request.Strength != LockStrength.Update || request.Wait != LockWait.Wait)
+        {
+            throw RowLockQueryErrors.Rejected("UUID-array locking requires Update with Wait");
+        }
+
+        if (_takeCount != 0 || _terminalCount != 0)
+        {
+            throw RowLockQueryErrors.Rejected("UUID-array locking requires complete entity enumeration without Take, First, or Single");
+        }
+
+        if (_orderings.Count is < 1 or > 2)
+        {
+            throw RowLockQueryErrors.Rejected("UUID-array locking requires ascending Id, optionally preceded by one ascending direct Guid key");
+        }
+
+        var operatorNames = _orderingOperators.AsEnumerable().Reverse().ToArray();
+        if (operatorNames[0] != nameof(Queryable.OrderBy)
+            || operatorNames.Skip(1).Any(name => name != nameof(Queryable.ThenBy)))
+        {
+            throw RowLockQueryErrors.Rejected("UUID-array ordering must use ascending OrderBy and optional ThenBy");
+        }
+
+        var orderedMembers = _orderings.AsEnumerable().Reverse()
+            .Select(ordering => ReadOrderingProperty(ordering, entityType))
+            .ToArray();
+        var primaryKey = entityType.FindPrimaryKey();
+        if (primaryKey is null || primaryKey.Properties.Count != 1)
+        {
+            throw RowLockQueryErrors.Rejected("UUID-array locking requires one single-property Guid primary key");
+        }
+
+        var key = primaryKey.Properties[0];
+        if (!IsDirectUuidProperty(key)
+            || !ReferenceEquals(orderedMembers[^1], key))
+        {
+            throw RowLockQueryErrors.Rejected("UUID-array membership and final ordering must use the direct unconverted Guid primary key");
+        }
+
+        if (orderedMembers.Length == 2)
+        {
+            var prefix = orderedMembers[0];
+            if (!IsDirectUuidProperty(prefix) || ReferenceEquals(prefix, key))
+            {
+                throw RowLockQueryErrors.Rejected("the optional UUID-array ordering prefix must be a separate direct Guid property");
+            }
+
+            _orderedSetPrefixColumn = ReadColumnName(prefix, entityType);
+        }
+
+        _orderedSetKeyColumn = ReadColumnName(key, entityType);
+    }
+
+    private void ValidateUuidMembership(MethodCallExpression call, ParameterExpression parameter, IEntityType entityType)
+    {
+        if (!call.Method.IsGenericMethod
+            || call.Method.GetGenericMethodDefinition() != EnumerableContainsMethod
+            || call.Method.GetGenericArguments()[0] != typeof(Guid)
+            || call.Arguments.Count != 2
+            || call.Arguments[0].Type != typeof(Guid[])
+            || !IsCapturedOrParameterizedGuidArray(call.Arguments[0])
+            || call.Arguments[1] is not MemberExpression { Expression: ParameterExpression root } member
+            || root != parameter
+            || member.Member is not (PropertyInfo or FieldInfo)
+            || entityType.FindProperty(member.Member.Name) is not IProperty property
+            || property.PropertyInfo != member.Member && property.FieldInfo != member.Member
+            || !IsDirectUuidProperty(property)
+            || entityType.FindPrimaryKey() is not { Properties.Count: 1 } primaryKey
+            || !ReferenceEquals(property, primaryKey.Properties[0]))
+        {
+            throw RowLockQueryErrors.Rejected("membership requires one captured or compiled Guid[] Enumerable.Contains<Guid> over the direct unconverted Guid primary key");
+        }
+
+        _uuidMembershipCount++;
+    }
+
+    private static bool IsGuidMemberContains(MethodCallExpression call, ParameterExpression parameter, IEntityType entityType)
+        => call.Method.Name == nameof(Enumerable.Contains)
+            && (call.Arguments.Any(argument => IsDirectGuidMember(argument, parameter, entityType))
+                || call.Object is not null && IsDirectGuidMember(call.Object, parameter, entityType));
+
+    private static bool IsDirectGuidMember(Expression expression, ParameterExpression parameter, IEntityType entityType)
+        => expression is MemberExpression { Expression: ParameterExpression root } member
+            && root == parameter
+            && member.Member is (PropertyInfo or FieldInfo)
+            && entityType.FindProperty(member.Member.Name) is IProperty property
+            && property.ClrType == typeof(Guid)
+            && (property.PropertyInfo == member.Member || property.FieldInfo == member.Member);
+
+    private static bool IsCapturedOrParameterizedGuidArray(Expression expression)
+        => expression is QueryParameterExpression { Type: var parameterType } && parameterType == typeof(Guid[])
+            || expression is MemberExpression { Type: var memberType, Expression: ConstantExpression }
+                && memberType == typeof(Guid[]);
+
+    private static bool IsDirectUuidProperty(IProperty property)
+        => property.ClrType == typeof(Guid)
+            && property.GetTypeMapping().Converter is null
+            && string.Equals(property.GetRelationalTypeMapping().StoreType, "uuid", StringComparison.OrdinalIgnoreCase);
+
+    private static IProperty ReadOrderingProperty(LambdaExpression ordering, IEntityType entityType)
+    {
+        if (ordering.Parameters.Count != 1
+            || ordering.Parameters[0].Type != entityType.ClrType
+            || ordering.Body is not MemberExpression { Expression: ParameterExpression parameter } member
+            || parameter != ordering.Parameters[0]
+            || member.Member is not (PropertyInfo or FieldInfo)
+            || entityType.FindProperty(member.Member.Name) is not IProperty property
+            || property.PropertyInfo != member.Member && property.FieldInfo != member.Member)
+        {
+            throw RowLockQueryErrors.Rejected("ordering keys must be direct mapped scalar members of the root entity");
+        }
+
+        return property;
+    }
+
+    private static string ReadColumnName(IProperty property, IEntityType entityType)
+    {
+        var tableName = entityType.GetTableName()
+            ?? throw RowLockQueryErrors.Rejected("the root entity has no single mapped table");
+        var columnName = property.GetColumnName(StoreObjectIdentifier.Table(tableName, entityType.GetSchema()));
+        return columnName
+            ?? throw RowLockQueryErrors.Rejected("the ordered UUID property has no mapped table column");
     }
 
     private static bool IsPrimaryOrdering(string name)
@@ -264,6 +415,17 @@ internal sealed class RowLockQueryValidation
             ValidatePredicateNode(conjunction.Left, parameter, entityType);
             ValidatePredicateNode(conjunction.Right, parameter, entityType);
             return;
+        }
+
+        if (expression is MethodCallExpression methodCall)
+        {
+            if (IsGuidMemberContains(methodCall, parameter, entityType))
+            {
+                ValidateUuidMembership(methodCall, parameter, entityType);
+                return;
+            }
+
+            throw RowLockQueryErrors.Rejected("predicates may contain only direct mapped scalar equality and AND");
         }
 
         if (expression is not BinaryExpression { NodeType: ExpressionType.Equal } equality)
@@ -380,16 +542,7 @@ internal sealed class RowLockQueryValidation
 
     private void ValidateOrdering(LambdaExpression ordering, IEntityType entityType)
     {
-        if (ordering.Parameters.Count != 1
-            || ordering.Parameters[0].Type != entityType.ClrType
-            || ordering.Body is not MemberExpression { Expression: ParameterExpression parameter } member
-            || parameter != ordering.Parameters[0]
-            || member.Member is not (PropertyInfo or FieldInfo)
-            || entityType.FindProperty(member.Member.Name) is not IProperty property
-            || property.PropertyInfo != member.Member && property.FieldInfo != member.Member)
-        {
-            throw RowLockQueryErrors.Rejected("ordering keys must be direct mapped scalar members of the root entity");
-        }
+        _ = ReadOrderingProperty(ordering, entityType);
     }
 
     private static HashSet<MethodInfo> CreateQueryMethods()

@@ -6,6 +6,7 @@ This guide covers atomic insert-ignore, PostgreSQL wall-clock access and read-on
 |---|---|
 | [InsertIgnoreAsync](#insert-api) | Whether one row was inserted |
 | [ReadClockTimestampAsync](#clock-api) | One server-clock value as UTC `DateTime` |
+| [ReadClockExpiryAsync](#clock-expiry-api) | A shared server sample and expiry as UTC `DateTimeOffset`, or no representable expiry |
 | [MapClockTimestamp / ClockTimestamp](#clock-mapping-api) | A model mapping and a server-side clock expression |
 | [SetTransactionReadOnlyAsync](#read-only-api) | A read-only setting on the current transaction |
 
@@ -86,12 +87,48 @@ SELECT pg_catalog.clock_timestamp();
 
 It reads `pg_catalog.clock_timestamp()` once and returns a UTC `DateTime` at PostgreSQL's microsecond precision. It borrows an attached current transaction when present and can run standalone otherwise. It balances the connection ownership acquired by the call, preserving an already-open connection. Cancellation and provider errors propagate. No client clock is substituted.
 
-Reuse the returned value explicitly when several application values need the same sample. A sample does not establish equivalence to a compound server-side lease predicate/update or define TTL, interval arithmetic or overflow policy.
+Reuse the returned value explicitly when several application values need the same sample. For a shared sample and server-calculated expiry, use the following method.
+
+<a id="clock-expiry-api"></a>
+## ReadClockExpiryAsync
+
+`Task<(DateTimeOffset SampledAt, DateTimeOffset ExpiresAt)?> ReadClockExpiryAsync(this DatabaseFacade database, TimeSpan duration, CancellationToken cancellationToken = default)` reads one volatile server sample and computes its expiry in the same statement. The duration must be positive and contain whole milliseconds. Invalid durations throw `ArgumentOutOfRangeException` before executing a command. Whole-millisecond durations beyond `int.MaxValue` milliseconds are supported.
+
+```csharp
+var expiry = await db.Database.ReadClockExpiryAsync(TimeSpan.FromDays(30), ct);
+if (expiry is { } times)
+{
+    DateTimeOffset sampledAt = times.SampledAt;
+    DateTimeOffset expiresAt = times.ExpiresAt;
+}
+```
+
+Both values have zero UTC offset and PostgreSQL microsecond precision. The calculation uses one `pg_catalog.clock_timestamp()` sample and `duration_milliseconds * interval '1 millisecond'` with a parameterized `long` duration. An expiry beyond `9999-12-31 23:59:59.999999+00` returns `null`; no expiry is clamped and no client-clock value is substituted. The upper bound is a SQL timestamp literal so provider infinity conversions cannot alter it. Application TTL limits and lease policy belong to the caller.
+
+**SQL** (`$1 = 2592000000`, type `bigint`, for 30 days; no entity model is involved):
+
+```sql
+WITH sample AS MATERIALIZED (
+    SELECT pg_catalog.clock_timestamp() AS sampled_at
+), calculated AS (
+    SELECT sampled_at,
+           sampled_at + $1 * INTERVAL '1 millisecond' AS expires_at
+    FROM sample
+)
+SELECT sampled_at,
+       CASE
+           WHEN expires_at > TIMESTAMPTZ '9999-12-31 23:59:59.999999+00' THEN NULL
+           ELSE expires_at
+       END AS expires_at
+FROM calculated;
+```
+
+The method borrows an attached current transaction when present and otherwise runs as one standalone statement. It balances EF connection ownership and propagates cancellation and native provider errors. It creates no transaction, performs no write and retries nothing. Keep the returned pair together when persisting a sample and its expiry.
 
 <a id="clock-mapping-api"></a>
 ## MapClockTimestamp and DatabaseClock.ClockTimestamp
 
-`MapClockTimestamp()` returns the same `ModelBuilder` and configures translation. This registration executes no SQL. `DatabaseClock.ClockTimestamp()` represents a `DateTime` expression to evaluate on PostgreSQL inside a translated query.
+`MapClockTimestamp()` returns the same `ModelBuilder` and configures both clock expressions. This registration executes no SQL. `DatabaseClock.ClockTimestamp()` represents a `DateTime` expression; `DatabaseClock.ClockTimestampOffset()` represents a `DateTimeOffset` expression. Both evaluate `pg_catalog.clock_timestamp()` on PostgreSQL inside a translated query.
 
 Register the mapping in `OnModelCreating`:
 
@@ -121,7 +158,7 @@ LIMIT 1;
 
 `DatabaseClock.ClockTimestamp()` maps to PostgreSQL's volatile wall clock. Its value is taken when the function is evaluated. PostgreSQL `now()` instead represents transaction start time. Repeated calls can return different values inside one statement; the mapping does not promise a single shared evaluation. Direct invocation in client code throws `NotSupportedException`.
 
-This projection is an ordinary query without a row-lock marker. Row-lock projection restrictions still apply. Clock predicates/`ExecuteUpdate`, `DateTimeOffset` conversions, shared-sample server arithmetic, arbitrary CTE/update compositions and overflow equivalence are outside the verified usage described here.
+These are ordinary translated expressions without a row-lock marker; row-lock projection restrictions still apply. `ClockTimestampOffset()` can be compared with mapped `DateTimeOffset` timestamps in predicates and assigned to a timestamp or nullable timestamp through `ExecuteUpdate`. Each occurrence remains volatile, including separate occurrences in a predicate and setter. It does not make them one shared sample. Client invocation of either clock expression throws `NotSupportedException`. Arbitrary CTE/update compositions and clock arithmetic outside `ReadClockExpiryAsync` have no additional library guarantee.
 
 <a id="read-only-api"></a>
 ## SetTransactionReadOnlyAsync

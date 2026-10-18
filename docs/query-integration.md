@@ -130,11 +130,12 @@ The accepted grammar is closed. Each condition below must hold for the complete 
 |---|---|
 | Root | One ordinary entity mapped directly to one unambiguous table occurrence; materialize the entity itself |
 | Tracking | Tracked or `AsNoTracking` entity queries |
-| Predicate | Direct mapped scalar properties compared by equality with constants or extracted EF parameters; combine equalities with `AND` |
+| Predicate | Direct mapped scalar properties compared by equality with constants or extracted EF parameters; combine with `AND`. The complete ordered UUID-set form additionally admits its one membership predicate |
 | Key | Primary, natural or composite predicates under the same rule; nullable and converted properties retain their explicitly verified mapping constraints |
 | Marker position | Before or after an admitted `Where` |
-| Terminal | `Single`, `SingleOrDefault`, `First`, `FirstOrDefault`, their async counterparts, or sync/async entity enumeration |
+| Terminal | `Single`, `SingleOrDefault`, `First`, `FirstOrDefault`, their async counterparts, or sync/async entity enumeration; complete UUID sets require enumeration |
 | Bounded ordered selection | Direct mapped scalar `OrderBy`/`OrderByDescending`, optional `ThenBy`/`ThenByDescending`, followed by one `Take(1)`; no offset |
+| Complete ordered UUID set | One captured or compiled `Guid[]` parameter used with `Enumerable.Contains<Guid>` on the direct, unconverted Guid primary key; ascending key order, optionally preceded by one ascending direct Guid column; full entity enumeration with `Update` and `Wait`, without a limit |
 | Reuse | `EF.CompileQuery` and `EF.CompileAsyncQuery` with constant lock options; ordinary cache reuse |
 | Query tags | Ordinary constant user tags; reserved protocol material and dynamic lock-query tags are rejected |
 
@@ -144,12 +145,23 @@ The following forms are rejected before the requested SELECT is issued:
 
 - JOIN, LEFT JOIN, self-join and multiple targets; projections, including identity `Select`;
 - `Include`, split queries, eager navigations, global filters including named filters;
-- navigation/member chains, predicate subqueries, methods, `OR`, inequalities and client evaluation;
+- navigation/member chains, predicate subqueries, unadmitted methods, `OR`, inequalities and client evaluation;
 - raw SQL/function roots, views, inheritance, owned/complex, shared or split mappings;
 - nested locking/pushdown, `Skip`, arbitrary or repeated `Take`, `Distinct`, grouping, aggregates, `Any`/`Count` and set operations;
 - repeated lock markers, dynamic options and other unknown shapes.
 
-A familiar operator name does not admit every overload or expression using it. Custom mappings outside the verified cases need their own provider validation. Ordered multirow array/key-set locking is outside the current scope.
+A familiar operator name does not admit every overload or expression using it. Custom mappings outside the verified cases need their own provider validation. The UUID-set form below is the only admitted complete ordered multirow selection.
+
+<a id="ordered-set-api"></a>
+### Complete ordered UUID sets
+
+Use `Where(x => ids.Contains(x.Id)).OrderBy(x => x.Id).ForUpdate()` for an array `Guid[] ids` and an entity whose single-property primary key `Id` maps directly to `uuid`. For a stable parent-first protocol, use `OrderBy(x => x.ParentId).ThenBy(x => x.Id)` with a directly mapped, unconverted Guid `ParentId`. Materialize the complete entities with `ToListAsync` or enumeration. These partial snippets require an appropriately mapped UUID entity; the integer-key `Document` example above does not supply that model.
+
+The array may be extracted from a closure or passed to a compiled query. Exactly one UUID membership predicate is admitted, optionally combined with the existing equality predicates through `AND`. The primary key is the last ordering term. All ordering terms must be ascending; the caller must preserve their values during the locking protocol. The library validates the original ordering and its final relational target, and leaves predicate translation to Npgsql.
+
+This form uses `Update` with `Wait`. Other strengths/wait modes, `Take`, `Skip`, scalar terminals such as `First`/`Single`, projections, JOINs, composite primary keys and arbitrary collection expressions are rejected. Existing ordered `Take(1)` queries retain their separate grammar.
+
+Duplicate array values do not duplicate rows; missing IDs produce no rows and an empty array produces an empty result. The caller checks expected membership and cardinality. Row locks protect existing selected rows; they do not prevent insertion of absent IDs. Concurrent changes to ordering keys invalidate application-level ordering assumptions. Keep the selected keys immutable for the duration of cooperating operations.
 
 <a id="selection-api"></a>
 ### Selection and concurrency

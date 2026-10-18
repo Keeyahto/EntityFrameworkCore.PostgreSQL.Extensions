@@ -2,7 +2,7 @@
   <PropertyGroup>
     <IsPackable>true</IsPackable>
     <PackageId>EntityFrameworkCore.PostgreSQL.Extensions</PackageId>
-    <Version>0.1.0-preview.5</Version>
+    <Version>0.1.0-preview.6</Version>
     <Authors>Keeyahto</Authors>
     <Description>Typed PostgreSQL row locks, transaction advisory locks, atomic insert-ignore and database time for Entity Framework Core.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>

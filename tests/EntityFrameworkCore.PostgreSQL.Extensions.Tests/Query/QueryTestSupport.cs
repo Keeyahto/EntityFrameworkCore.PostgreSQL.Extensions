@@ -180,10 +180,12 @@ internal static partial class QueryTestSupport
         await context.SaveChangesAsync();
     }
 
-    public static string RootAlias(string sql)
+    public static string RootAlias(string sql, string tableName = "Rows")
     {
-        var match = RootTableAliasRegex().Match(sql);
-        Assert.True(match.Success, $"Expected a generated Rows alias in SQL: {sql}");
+        var match = Regex.Match(sql,
+            $"""FROM "{Regex.Escape(tableName)}" AS (?<alias>"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)""",
+            RegexOptions.CultureInvariant);
+        Assert.True(match.Success, $"Expected a generated {tableName} alias in SQL: {sql}");
         return match.Groups["alias"].Value;
     }
 
@@ -201,6 +203,4 @@ internal static partial class QueryTestSupport
         output.WriteLine($"{queryId}|production|expected={disposition}|observed={disposition}|{detail}");
     }
 
-    [GeneratedRegex("""FROM "Rows" AS (?<alias>"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)""", RegexOptions.CultureInvariant)]
-    private static partial Regex RootTableAliasRegex();
 }

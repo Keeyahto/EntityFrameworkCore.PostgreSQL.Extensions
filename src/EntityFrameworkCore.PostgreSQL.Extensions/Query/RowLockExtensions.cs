@@ -154,8 +154,11 @@ internal sealed record LockQueryIntent(
     string TableName,
     string? Schema,
     string? TakeParameterName,
-    bool HasTake)
+    bool HasTake,
+    string? OrderedSetPrefixColumn,
+    string? OrderedSetKeyColumn)
 {
+    public bool IsOrderedSet => OrderedSetKeyColumn is not null;
     public string Tag => LockProtocol.Format(LockProtocol.TagPrefix, this);
     public string Receipt => LockProtocol.Format(LockProtocol.ReceiptPrefix, this);
 }
@@ -171,51 +174,35 @@ internal static class LockProtocol
 
     public static string Format(string prefix, LockQueryIntent request)
     {
-        var take = request.TakeParameterName is null
-            ? "-"
-            : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.TakeParameterName))
-                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var table = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.TableName))
-            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var entity = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.EntityTypeName))
-            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        var schema = request.Schema is null
-            ? "-"
-            : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(request.Schema))
-                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        return $"{prefix}{(int)request.Strength}:{(int)request.Wait}:{(request.HasTake ? 1 : 0)}:{take}:{entity}:{table}:{schema}";
+        return $"{prefix}{(int)request.Strength}:{(int)request.Wait}:{(request.HasTake ? 1 : 0)}:{Encode(request.TakeParameterName)}:{Encode(request.EntityTypeName)}:{Encode(request.TableName)}:{Encode(request.Schema)}:{Encode(request.OrderedSetPrefixColumn)}:{Encode(request.OrderedSetKeyColumn)}";
     }
 
     public static bool TryParseIntent(string text, string prefix, out LockQueryIntent intent)
     {
         intent = null!;
         var parts = text.Split(':');
-        if (parts.Length != 7
+        if (parts.Length != 9
             || !int.TryParse(parts[0], out var strengthValue)
             || !Enum.IsDefined((LockStrength)strengthValue)
             || !int.TryParse(parts[1], out var waitValue)
             || !Enum.IsDefined((LockWait)waitValue)
             || parts[2] is not ("0" or "1")
             || parts[2] == "0" && parts[3] != "-"
-            || !TryDecode(parts[4], out var entityTypeName)
+            || !TryDecodeRequired(parts[4], out var entityTypeName)
             || entityTypeName.Length == 0
-            || !TryDecode(parts[5], out var tableName)
-            || tableName.Length == 0)
+            || !TryDecodeRequired(parts[5], out var tableName)
+            || tableName.Length == 0
+            || !TryDecodeOptional(parts[6], out var schema)
+            || !TryDecodeOptional(parts[7], out var orderedSetPrefixColumn)
+            || !TryDecodeOptional(parts[8], out var orderedSetKeyColumn)
+            || (orderedSetPrefixColumn is not null || orderedSetKeyColumn is not null)
+                && (orderedSetKeyColumn is null || parts[2] != "0" || parts[3] != "-"))
         {
             return false;
         }
 
-        string? takeParameterName = null;
-        if (parts[3] != "-")
-        {
-            if (!TryDecode(parts[3], out takeParameterName) || string.IsNullOrEmpty(takeParameterName))
-            {
-                return false;
-            }
-        }
-
-        string? schema = null;
-        if (parts[6] != "-" && !TryDecode(parts[6], out schema))
+        if (!TryDecodeOptional(parts[3], out var takeParameterName)
+            || takeParameterName is not null && takeParameterName.Length == 0)
         {
             return false;
         }
@@ -227,8 +214,46 @@ internal static class LockProtocol
             tableName,
             schema,
             takeParameterName,
-            parts[2] == "1");
+            parts[2] == "1",
+            orderedSetPrefixColumn,
+            orderedSetKeyColumn);
         return Format(prefix, intent) == prefix + text;
+    }
+
+    private static string Encode(string? value)
+        => value is null
+            ? "-"
+            : Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(value))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static bool TryDecodeOptional(string value, out string? decoded)
+    {
+        if (value == "-")
+        {
+            decoded = null;
+            return true;
+        }
+
+        if (TryDecode(value, out var required))
+        {
+            decoded = required;
+            return true;
+        }
+
+        decoded = null;
+        return false;
+    }
+
+    private static bool TryDecodeRequired(string value, out string decoded)
+    {
+        if (value != "-" && TryDecode(value, out var required))
+        {
+            decoded = required;
+            return true;
+        }
+
+        decoded = string.Empty;
+        return false;
     }
 
     private static bool TryDecode(string value, out string decoded)

@@ -6,6 +6,7 @@
 |---|---|
 | [InsertIgnoreAsync](#insert-api) | Признак того, была ли вставлена строка |
 | [ReadClockTimestampAsync](#clock-api) | Одно значение серверных часов как UTC `DateTime` |
+| [ReadClockExpiryAsync](#clock-expiry-api) | Общий серверный отсчёт и срок как UTC `DateTimeOffset` либо отсутствие представимого срока |
 | [MapClockTimestamp / ClockTimestamp](#clock-mapping-api) | Настройка модели и выражение для серверных часов |
 | [SetTransactionReadOnlyAsync](#read-only-api) | Режим только для чтения у текущей транзакции |
 
@@ -86,12 +87,48 @@ SELECT pg_catalog.clock_timestamp();
 
 Он один раз читает `pg_catalog.clock_timestamp()` и возвращает UTC `DateTime` с микросекундной точностью PostgreSQL. При наличии используется текущая присоединённая транзакция; без неё допускается самостоятельный оператор. Метод уравновешивает полученное им владение соединением, сохраняя ранее открытое соединение. Отмена и ошибки провайдера передаются дальше. Клиентские часы не подставляются.
 
-Если нескольким значениям приложения нужен один момент времени, явно используйте полученный результат повторно. Такой отсчёт не доказывает эквивалентность составному серверному предикату/обновлению lease и не задаёт TTL, арифметику интервалов или правила переполнения.
+Если нескольким значениям приложения нужен один момент времени, явно используйте полученный результат повторно. Для общего отсчёта и срока, вычисленного сервером, используйте следующий метод.
+
+<a id="clock-expiry-api"></a>
+## ReadClockExpiryAsync
+
+`Task<(DateTimeOffset SampledAt, DateTimeOffset ExpiresAt)?> ReadClockExpiryAsync(this DatabaseFacade database, TimeSpan duration, CancellationToken cancellationToken = default)` получает один серверный отсчёт и вычисляет срок в том же операторе. Длительность должна быть положительной и содержать целое число миллисекунд. Неверная длительность приводит к `ArgumentOutOfRangeException` до выполнения команды. Поддерживаются длительности больше `int.MaxValue` миллисекунд.
+
+```csharp
+var expiry = await db.Database.ReadClockExpiryAsync(TimeSpan.FromDays(30), ct);
+if (expiry is { } times)
+{
+    DateTimeOffset sampledAt = times.SampledAt;
+    DateTimeOffset expiresAt = times.ExpiresAt;
+}
+```
+
+Оба значения имеют нулевое смещение UTC и микросекундную точность PostgreSQL. Расчёт использует один вызов `pg_catalog.clock_timestamp()` и `duration_milliseconds * interval '1 millisecond'` с параметром типа `long`. Если срок превышает `9999-12-31 23:59:59.999999+00`, возвращается `null`; значение не ограничивается сверху и клиентские часы не подставляются. Верхняя граница задана SQL-литералом времени, поэтому преобразование бесконечности провайдером её не меняет. Ограничения TTL и политика lease принадлежат приложению.
+
+**SQL** (`$1 = 2592000000`, тип `bigint`, для 30 дней; модель сущности не используется):
+
+```sql
+WITH sample AS MATERIALIZED (
+    SELECT pg_catalog.clock_timestamp() AS sampled_at
+), calculated AS (
+    SELECT sampled_at,
+           sampled_at + $1 * INTERVAL '1 millisecond' AS expires_at
+    FROM sample
+)
+SELECT sampled_at,
+       CASE
+           WHEN expires_at > TIMESTAMPTZ '9999-12-31 23:59:59.999999+00' THEN NULL
+           ELSE expires_at
+       END AS expires_at
+FROM calculated;
+```
+
+При наличии используется текущая присоединённая транзакция, иначе выполняется один самостоятельный оператор. Метод уравновешивает владение соединением EF и передаёт отмену и штатные ошибки провайдера. Он не создаёт транзакцию, ничего не записывает и не повторяет выполнение. При сохранении отсчёта и срока используйте возвращённую пару целиком.
 
 <a id="clock-mapping-api"></a>
 ## MapClockTimestamp и DatabaseClock.ClockTimestamp
 
-`MapClockTimestamp()` возвращает тот же `ModelBuilder` и настраивает трансляцию. При регистрации SQL не выполняется. `DatabaseClock.ClockTimestamp()` представляет выражение типа `DateTime`, которое PostgreSQL вычисляет внутри транслируемого запроса.
+`MapClockTimestamp()` возвращает тот же `ModelBuilder` и настраивает обе функции часов. При регистрации SQL не выполняется. `DatabaseClock.ClockTimestamp()` представляет выражение типа `DateTime`, а `DatabaseClock.ClockTimestampOffset()` — типа `DateTimeOffset`. Обе функции вычисляют `pg_catalog.clock_timestamp()` на PostgreSQL внутри транслируемого запроса.
 
 Зарегистрируйте отображение в `OnModelCreating`:
 
@@ -121,7 +158,7 @@ LIMIT 1;
 
 `DatabaseClock.ClockTimestamp()` отображается на изменяющееся текущее время PostgreSQL. Значение берётся при вычислении функции. PostgreSQL `now()` обозначает время начала транзакции. Повторные вызовы могут вернуть разные значения даже внутри одного оператора; отображение не гарантирует единственное общее вычисление. Прямой вызов в клиентском коде приводит к `NotSupportedException`.
 
-Эта проекция — обычный запрос без маркера блокировки строк. Ограничения проекций для блокируемых запросов сохраняются. Предикаты/`ExecuteUpdate` с часами, преобразования `DateTimeOffset`, серверная арифметика с общим отсчётом, произвольные CTE/обновления и эквивалентность переполнения находятся за пределами описанного проверенного использования.
+Это обычные транслируемые выражения без маркера блокировки строк; ограничения проекций блокируемых запросов сохраняются. `ClockTimestampOffset()` допускает сравнение с отображёнными `DateTimeOffset` в предикате и присваивание обычному или nullable-столбцу времени через `ExecuteUpdate`. Каждое вхождение остаётся отдельным изменяющимся отсчётом, включая вхождения в предикате и присваивании. Общего отсчёта они не создают. Клиентский вызов любой функции приводит к `NotSupportedException`. Произвольные CTE/обновления и арифметика времени за пределами `ReadClockExpiryAsync` не получают дополнительных гарантий библиотеки.
 
 <a id="read-only-api"></a>
 ## SetTransactionReadOnlyAsync

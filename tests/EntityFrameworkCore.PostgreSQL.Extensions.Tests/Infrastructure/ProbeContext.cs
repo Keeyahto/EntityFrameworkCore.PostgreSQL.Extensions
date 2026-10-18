@@ -11,6 +11,10 @@ public class ProbeContext(DbContextOptions options) : DbContext(options)
 
     public DbSet<ProbeChild> Children => Set<ProbeChild>();
 
+    public DbSet<UuidProbeRow> UuidRows => Set<UuidProbeRow>();
+
+    public DbSet<CompositeUuidProbeRow> CompositeUuidRows => Set<CompositeUuidProbeRow>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<ProbeRow>(entity =>
@@ -44,6 +48,22 @@ public class ProbeContext(DbContextOptions options) : DbContext(options)
             entity.ToTable("Children");
             entity.HasKey(child => child.Id);
             entity.Property(child => child.Payload).IsRequired();
+        });
+
+        modelBuilder.Entity<UuidProbeRow>(entity =>
+        {
+            entity.ToTable("UuidRows");
+            entity.HasKey(row => row.Id);
+            entity.Property(row => row.Payload).IsRequired();
+            entity.Property(row => row.ConvertedGuid)
+                .HasConversion(new ValueConverter<Guid, string>(value => value.ToString("D"), value => Guid.Parse(value)));
+        });
+
+        modelBuilder.Entity<CompositeUuidProbeRow>(entity =>
+        {
+            entity.ToTable("CompositeUuidRows");
+            entity.HasKey(row => new { row.Id, row.ScopeId });
+            entity.Property(row => row.Payload).IsRequired();
         });
     }
 }
@@ -114,4 +134,24 @@ public sealed class ProbeChild
     public string Payload { get; set; } = string.Empty;
 
     public ProbeRow Row { get; set; } = null!;
+}
+
+public sealed class UuidProbeRow
+{
+    public Guid Id { get; set; }
+
+    public Guid ScopeId { get; set; }
+
+    public Guid ConvertedGuid { get; set; }
+
+    public string Payload { get; set; } = string.Empty;
+}
+
+public sealed class CompositeUuidProbeRow
+{
+    public Guid Id { get; set; }
+
+    public Guid ScopeId { get; set; }
+
+    public string Payload { get; set; } = string.Empty;
 }

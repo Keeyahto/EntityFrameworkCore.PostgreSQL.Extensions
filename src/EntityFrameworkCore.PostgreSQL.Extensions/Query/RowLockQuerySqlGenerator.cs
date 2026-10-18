@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.EntityFrameworkCore.Query.SqlExpressions;
 using Microsoft.EntityFrameworkCore.Storage;
+using Npgsql.EntityFrameworkCore.PostgreSQL.Query.Expressions.Internal;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure.Internal;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Query.Internal;
 
@@ -80,12 +81,16 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
                 "the finalized SELECT must retain one exact mapped table occurrence and a stable lock scope");
         }
 
-        if (!LimitIsAdmitted(selectExpression.Limit, intent))
+        if (intent.IsOrderedSet)
+        {
+            ValidateOrderedSetSelect(selectExpression, target, intent);
+        }
+        else if (!LimitIsAdmitted(selectExpression.Limit, intent))
         {
             throw RowLockQueryErrors.Rejected("the finalized SELECT does not preserve its exact Take(1) or approved terminal limit");
         }
 
-        var treeGuard = new FinalSelectGuard(target.Alias);
+        var treeGuard = new FinalSelectGuard(target.Alias, intent.IsOrderedSet ? intent.OrderedSetKeyColumn : null);
         foreach (var projection in selectExpression.Projection)
         {
             treeGuard.Visit(projection.Expression);
@@ -104,6 +109,11 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
         if (selectExpression.Limit is not null)
         {
             treeGuard.Visit(selectExpression.Limit);
+        }
+
+        if (intent.IsOrderedSet && treeGuard.UuidMembershipCount != 1)
+        {
+            throw RowLockQueryErrors.Rejected("the finalized SELECT must retain exactly one native Guid-array membership predicate on its lock key");
         }
 
         Sql.Append(" FOR ");
@@ -134,6 +144,29 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
         Sql.Append(" /*");
         Sql.Append(intent.Receipt);
         Sql.Append("*/");
+    }
+
+    private static void ValidateOrderedSetSelect(SelectExpression selectExpression, TableExpression target, LockQueryIntent intent)
+    {
+        if (selectExpression.Limit is not null || selectExpression.Orderings.Count != (intent.OrderedSetPrefixColumn is null ? 1 : 2))
+        {
+            throw RowLockQueryErrors.Rejected("the finalized UUID-set SELECT must enumerate every match with no limit and the original ordering terms");
+        }
+
+        var expectedColumns = intent.OrderedSetPrefixColumn is null
+            ? new[] { intent.OrderedSetKeyColumn! }
+            : new[] { intent.OrderedSetPrefixColumn, intent.OrderedSetKeyColumn! };
+        for (var index = 0; index < expectedColumns.Length; index++)
+        {
+            var ordering = selectExpression.Orderings[index];
+            if (!ordering.IsAscending
+                || ordering.Expression is not ColumnExpression column
+                || column.TableAlias != target.Alias
+                || column.Name != expectedColumns[index])
+            {
+                throw RowLockQueryErrors.Rejected("the finalized UUID-set SELECT must preserve the original ascending root-column ordering");
+            }
+        }
     }
 
     private static bool LimitIsAdmitted(SqlExpression? limit, LockQueryIntent intent)
@@ -181,8 +214,14 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
     private sealed class FinalSelectGuard : ExpressionVisitor
     {
         private readonly string _targetAlias;
+        private readonly string? _uuidMembershipColumn;
+        public int UuidMembershipCount { get; private set; }
 
-        public FinalSelectGuard(string targetAlias) => _targetAlias = targetAlias;
+        public FinalSelectGuard(string targetAlias, string? uuidMembershipColumn)
+        {
+            _targetAlias = targetAlias;
+            _uuidMembershipColumn = uuidMembershipColumn;
+        }
 
         protected override Expression VisitExtension(Expression node)
         {
@@ -197,6 +236,20 @@ internal sealed class RowLockQuerySqlGenerator : NpgsqlQuerySqlGenerator
             if (node is ColumnExpression column && column.TableAlias != _targetAlias)
             {
                 throw RowLockQueryErrors.Rejected("the final SELECT contains a column outside its exact root table alias");
+            }
+
+            if (node is PgAnyExpression any)
+            {
+                UuidMembershipCount++;
+                if (_uuidMembershipColumn is null
+                    || any.OperatorType != PgAnyOperatorType.Equal
+                    || any.Item is not ColumnExpression { } item
+                    || item.TableAlias != _targetAlias
+                    || item.Name != _uuidMembershipColumn
+                    || any.Array.Type != typeof(Guid[]))
+                {
+                    throw RowLockQueryErrors.Rejected("the finalized SELECT contains an unadmitted PostgreSQL array membership expression");
+                }
             }
 
             return base.VisitExtension(node);

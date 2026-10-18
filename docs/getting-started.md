@@ -17,7 +17,7 @@ dotnet restore
 dotnet pack src/EntityFrameworkCore.PostgreSQL.Extensions --configuration Release --output artifacts/packages
 ```
 
-The runtime archive is `EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.5.nupkg`. Use a separate directory for your application. Create `Demo.csproj` there:
+The runtime archive is `EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.6.nupkg`. Use a separate directory for your application. Create `Demo.csproj` there:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
@@ -28,7 +28,7 @@ The runtime archive is `EntityFrameworkCore.PostgreSQL.Extensions.0.1.0-preview.
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="EntityFrameworkCore.PostgreSQL.Extensions" Version="0.1.0-preview.5" />
+    <PackageReference Include="EntityFrameworkCore.PostgreSQL.Extensions" Version="0.1.0-preview.6" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
   </ItemGroup>
