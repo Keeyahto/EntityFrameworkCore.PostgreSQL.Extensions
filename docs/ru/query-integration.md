@@ -4,8 +4,26 @@
 
 Примеры используют модель из [начала работы](getting-started.md). Для блокировок строк нужна [регистрация](capabilities.md#registration-api); advisory-блокировкам достаточно провайдера Npgsql.
 
+| Метод | Задача |
+|---|---|
+| [ForUpdate](#for-update-api) | Получить исключительную блокировку выбранных строк |
+| [ForShare](#for-share-api) | Получить разделяемую блокировку строк |
+| [WithRowLock](#with-row-lock-api) | Явно выбрать любую поддерживаемую силу блокировки |
+| [AcquireTransactionAdvisoryLockAsync](#advisory-api) | Согласовать работу по текстовому ключу, bigint или паре int |
+
+SQL ниже соответствует этой модели и [опорным версиям](compatibility.md). Внутренние комментарии протокола блокировок опущены, форматирование упрощено для чтения. `$1`, `$2` обозначают параметры PostgreSQL; значения указаны рядом с примерами. Начало и фиксация транзакции в SQL не показаны. Псевдонимы и запись параметров могут меняться между версиями провайдера.
+
 <a id="row-locks-api"></a>
 ## Блокировки строк
+
+Все три метода возвращают `IQueryable<T>` с прежним типом сущности. Они помечают запрос; выполнение происходит при вызове завершающего метода, например `SingleAsync`, или при перечислении. Для всех трёх действует [один набор допустимых форм](#query-shapes-api).
+
+<a id="for-update-api"></a>
+### ForUpdate
+
+Вызов `.ForUpdate()` или `.ForUpdate(LockWait wait)` запрашивает наиболее сильную блокировку строк PostgreSQL. Перегрузка без аргументов использует `Wait`; ниже выбран `NoWait`, чтобы сразу получить ошибку при несовместимой блокировке.
+
+**C#**
 
 ```csharp
 await using var transaction = await db.Database.BeginTransactionAsync(ct);
@@ -13,12 +31,78 @@ var document = await db.Documents
     .Where(x => x.Id == 1)
     .ForUpdate(LockWait.NoWait)
     .SingleAsync(ct);
-document.Payload = "changed";
-await db.SaveChangesAsync(ct);
 await transaction.CommitAsync(ct);
 ```
 
+**SQL**
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+WHERE d."Id" = 1
+LIMIT 2
+FOR UPDATE OF d NOWAIT;
+```
+
+`LIMIT 2` добавляет EF для `SingleAsync`, чтобы обнаружить несколько совпадений. Это не настройка блокировки. По умолчанию выбранная сущность отслеживается; для сохранения её последующих изменений всё ещё нужен `SaveChangesAsync` внутри транзакции приложения.
+
 Запрос добавляет `FOR UPDATE OF` для сгенерированного псевдонима корневой таблицы. Если другая транзакция держит несовместимую блокировку, `NoWait` приводит к ошибке PostgreSQL «блокировка недоступна». Запрос с маркером либо получает требуемую блокировку точного проверенного вхождения таблицы, либо завершается явной ошибкой. Успешный возврат якобы заблокированных данных после молчаливой потери маркера недопустим.
+
+<a id="for-share-api"></a>
+### ForShare
+
+Вызов `.ForShare()` или `.ForShare(LockWait wait)` получает разделяемую блокировку строки. Совместимые разделяемые блокировки могут сосуществовать; конфликтующее изменение ждёт или завершается ошибкой согласно режиму ожидания. По умолчанию используется `Wait`.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var document = await db.Documents
+    .Where(x => x.Id == 1)
+    .ForShare()
+    .SingleAsync(ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL**
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+WHERE d."Id" = 1
+LIMIT 2
+FOR SHARE OF d;
+```
+
+Блокировка действует до завершения транзакции. Отслеживание и сила блокировки независимы: `AsNoTracking` также допустим при соблюдении общей формы запроса.
+
+<a id="with-row-lock-api"></a>
+### WithRowLock
+
+Вызов `.WithRowLock(LockStrength strength, LockWait wait)` позволяет явно выбрать силу. Оба аргумента обязательны. В примере выбраны `NoKeyUpdate` и обычное ожидание.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var document = await db.Documents
+    .Where(x => x.Id == 1)
+    .WithRowLock(LockStrength.NoKeyUpdate, LockWait.Wait)
+    .SingleAsync(ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL**
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+WHERE d."Id" = 1
+LIMIT 2
+FOR NO KEY UPDATE OF d;
+```
+
+`KeyShare` даёт `FOR KEY SHARE OF d`; `Update` и `Share` соответствуют специализированным методам. Все режимы сохраняют одинаковые требования к транзакции и форме запроса.
 
 <a id="modes-api"></a>
 ### Сила блокировки и ожидание
@@ -82,6 +166,16 @@ var documents = await db.Documents
 await transaction.CommitAsync(ct);
 ```
 
+**SQL** (`$1 = 1` для `Take(1)`):
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+ORDER BY d."Id"
+LIMIT $1
+FOR UPDATE OF d SKIP LOCKED;
+```
+
 Результат может быть пустым. На READ COMMITTED оператор `ORDER BY` не задаёт универсальный порядок захвата блокировок и не гарантирует, что после ожидания и конкурентного изменения ключей вернувшаяся строка останется первой по сортировке. `Single` сохраняет штатную проверку количества результатов и может заблокировать просмотренные строки до обнаружения нескольких совпадений. Выбор уникального предиката, длительности и порядка работы остаётся за приложением.
 
 <a id="transaction-api"></a>
@@ -94,26 +188,69 @@ await transaction.CommitAsync(ct);
 Отмена передаётся дальше. Ошибки PostgreSQL, включая конфликт блокировки (`55P03`), сбой сериализации (`40001`), deadlock (`40P01`) и завершение backend (`57P01`), остаются распознаваемыми через штатные обёртки EF/Npgsql. Обработкой ошибки и состоянием транзакции управляет приложение. См. [диагностику](capabilities.md#troubleshooting-api).
 
 <a id="advisory-api"></a>
-## Координация через advisory-блокировки
+## AcquireTransactionAdvisoryLockAsync
 
-Advisory-блокировка представляет ключ, выбранный приложением. В протоколе участвуют только операции, которые получают ту же advisory-блокировку; произвольный SQL автоматически под её защиту не попадает.
+Advisory-блокировка представляет ключ, выбранный приложением. В протоколе участвуют только операции, которые получают ту же advisory-блокировку; произвольный SQL автоматически под её защиту не попадает. Все три перегрузки возвращают `Task` и требуют текущую явную транзакцию EF.
+
+<a id="advisory-text-api"></a>
+### Текстовый ключ
+
+Строковая перегрузка подходит для общей схемы ключей приложения. Она позволяет согласовать работу ещё до появления соответствующей строки.
+
+**C#**
 
 ```csharp
 await using var transaction = await db.Database.BeginTransactionAsync(ct);
 await db.Database.AcquireTransactionAdvisoryLockAsync("document:1", ct);
-var inserted = await db.InsertIgnoreAsync(
-    new Document { Id = 1, Payload = "created" }, x => x.Id, ct);
 await transaction.CommitAsync(ct);
 ```
 
-Договоритесь об общей схеме ключей для всех участников. Так можно согласовать работу ещё до появления соответствующей строки. Поддерживаемые перегрузки возвращают `Task`:
+**SQL** (`$1 = "document:1"`):
 
-```csharp
-await db.Database.AcquireTransactionAdvisoryLockAsync("document:1", ct);
-await db.Database.AcquireTransactionAdvisoryLockAsync(123L, ct);
-await db.Database.AcquireTransactionAdvisoryLockAsync(7, 123, ct);
+```sql
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0));
 ```
 
-Каждая строка выше — самостоятельный пример перегрузки для выполнения внутри транзакции приложения. Текстовый ключ обрабатывается PostgreSQL через `pg_advisory_xact_lock(hashtextextended(key, 0))`. Хеширование допускает коллизии и использует то же пространство bigint, что и перегрузка `long`. Пространство двух int в PostgreSQL отделено от пространства bigint. Не считайте похожие по записи текстовые, bigint и двухкомпонентные ключи одной блокировкой.
+Хеширование выполняется PostgreSQL с seed, равным нулю. Оно допускает коллизии и использует то же пространство bigint, что и перегрузка `long`.
+
+<a id="advisory-bigint-api"></a>
+### Ключ bigint
+
+Перегрузка `long` подходит, если протокол уже использует 64-битный ключ блокировки.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync(123L, ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL** (`$1 = 123`, тип `bigint`):
+
+```sql
+SELECT pg_advisory_xact_lock($1);
+```
+
+<a id="advisory-pair-api"></a>
+### Ключ из двух int
+
+Перегрузка с двумя `int` подходит для пары 32-битных ключей, например категории и ключа объекта.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync(7, 123, ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL** (`$1 = 7`, `$2 = 123`, оба имеют тип `integer`):
+
+```sql
+SELECT pg_advisory_xact_lock($1, $2);
+```
+
+Пространство двух int в PostgreSQL отделено от пространства bigint. Не считайте похожие по записи текстовые, bigint и двухкомпонентные ключи одной блокировкой.
 
 Операции блокирующие и ограничены временем транзакции. Ожидание можно отменить; PostgreSQL освобождает блокировку при завершении транзакции. Сессионного запасного режима, try-lock API, автоматических повторов и обработки коллизий нет.
