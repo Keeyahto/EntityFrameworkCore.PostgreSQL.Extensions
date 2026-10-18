@@ -4,8 +4,26 @@ Use a row lock to protect existing mapped rows while your transaction reads and 
 
 Examples use the model from [Getting started](getting-started.md). Register row-lock support as shown in [Configuration](capabilities.md#registration-api); advisory locks need only the Npgsql provider.
 
+| Method | Use it to |
+|---|---|
+| [ForUpdate](#for-update-api) | Exclusively lock selected rows |
+| [ForShare](#for-share-api) | Acquire shared row locks |
+| [WithRowLock](#with-row-lock-api) | Choose any supported row-lock strength |
+| [AcquireTransactionAdvisoryLockAsync](#advisory-api) | Coordinate by a text, bigint or two-int key |
+
+SQL below corresponds to this model and the [reference versions](compatibility.md). Internal lock-protocol comments are omitted and whitespace is formatted for reading. `$1`, `$2` denote PostgreSQL parameters; their values are explained beside each example. Transaction begin/commit are omitted from SQL listings. Aliases and parameter notation can vary with provider versions.
+
 <a id="row-locks-api"></a>
 ## Row locks
+
+The three row-lock methods return `IQueryable<T>` and preserve the entity type. They mark the query; execution happens at a terminal such as `SingleAsync` or enumeration. All three use the [same supported grammar](#query-shapes-api).
+
+<a id="for-update-api"></a>
+### ForUpdate
+
+Use `.ForUpdate()` or `.ForUpdate(LockWait wait)` to request PostgreSQL's strongest row-lock mode. The parameterless overload uses `Wait`; the following example uses `NoWait` to fail immediately on an incompatible holder.
+
+**C#**
 
 ```csharp
 await using var transaction = await db.Database.BeginTransactionAsync(ct);
@@ -13,12 +31,78 @@ var document = await db.Documents
     .Where(x => x.Id == 1)
     .ForUpdate(LockWait.NoWait)
     .SingleAsync(ct);
-document.Payload = "changed";
-await db.SaveChangesAsync(ct);
 await transaction.CommitAsync(ct);
 ```
 
+**SQL**
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+WHERE d."Id" = 1
+LIMIT 2
+FOR UPDATE OF d NOWAIT;
+```
+
+`LIMIT 2` comes from EF's `SingleAsync`: EF can detect multiple matches. It is separate from the lock mode. The selected entity is tracked by default; subsequent changes still need `SaveChangesAsync` inside the caller's transaction.
+
 This requests `FOR UPDATE OF` the generated root alias. If another transaction holds an incompatible lock, `NoWait` raises PostgreSQL's lock-not-available error. A query with a lock marker either obtains the requested lock on the validated root occurrence or fails explicitly. It cannot successfully return data as locked after silently dropping the request.
+
+<a id="for-share-api"></a>
+### ForShare
+
+Use `.ForShare()` or `.ForShare(LockWait wait)` for a shared row lock. Compatible shared holders may coexist; conflicting modifications wait or fail according to the selected wait mode. The default is `Wait`.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var document = await db.Documents
+    .Where(x => x.Id == 1)
+    .ForShare()
+    .SingleAsync(ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL**
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+WHERE d."Id" = 1
+LIMIT 2
+FOR SHARE OF d;
+```
+
+The lock lasts until transaction completion. Tracking and lock strength are independent: `AsNoTracking` is also eligible under the shared query grammar.
+
+<a id="with-row-lock-api"></a>
+### WithRowLock
+
+Use `.WithRowLock(LockStrength strength, LockWait wait)` when you need an explicit strength. Both arguments are required. This example chooses `NoKeyUpdate` and ordinary waiting.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+var document = await db.Documents
+    .Where(x => x.Id == 1)
+    .WithRowLock(LockStrength.NoKeyUpdate, LockWait.Wait)
+    .SingleAsync(ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL**
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+WHERE d."Id" = 1
+LIMIT 2
+FOR NO KEY UPDATE OF d;
+```
+
+`KeyShare` produces `FOR KEY SHARE OF d`; `Update` and `Share` correspond to the dedicated methods. All modes keep the same transaction and query-shape requirements.
 
 <a id="modes-api"></a>
 ### Strength and wait mode
@@ -82,6 +166,16 @@ var documents = await db.Documents
 await transaction.CommitAsync(ct);
 ```
 
+**SQL** (`$1 = 1` for `Take(1)`):
+
+```sql
+SELECT d."Id", d."Payload"
+FROM "Documents" AS d
+ORDER BY d."Id"
+LIMIT $1
+FOR UPDATE OF d SKIP LOCKED;
+```
+
 The result can be empty. At READ COMMITTED, `ORDER BY` supplies no universal lock-acquisition order or guarantee that the returned row still ranks first after a lock wait and concurrent key changes. `Single` preserves native multiplicity behavior and can lock inspected rows before reporting that several rows matched. A unique predicate and the duration/order of application work remain the caller's responsibility.
 
 <a id="transaction-api"></a>
@@ -94,26 +188,69 @@ Validation runs across original expression/model, final relational scope and com
 Cancellation propagates. PostgreSQL errors such as lock conflict (`55P03`), serialization failure (`40001`), deadlock (`40P01`) and backend termination (`57P01`) remain recognizable through native EF/Npgsql wrappers. The caller decides how to handle the failure and the transaction. See [Troubleshooting](capabilities.md#troubleshooting-api).
 
 <a id="advisory-api"></a>
-## Advisory coordination
+## AcquireTransactionAdvisoryLockAsync
 
-An advisory lock represents an application-defined key. Only operations that acquire the same advisory lock participate in that protocol; unrelated SQL is not protected automatically.
+An advisory lock represents an application-defined key. Only operations that acquire the same advisory lock participate in that protocol; unrelated SQL is not protected automatically. All three overloads return `Task` and require a current explicit EF transaction.
+
+<a id="advisory-text-api"></a>
+### Text key
+
+Use the string overload for a shared application key convention. The lock can coordinate work before a corresponding row exists.
+
+**C#**
 
 ```csharp
 await using var transaction = await db.Database.BeginTransactionAsync(ct);
 await db.Database.AcquireTransactionAdvisoryLockAsync("document:1", ct);
-var inserted = await db.InsertIgnoreAsync(
-    new Document { Id = 1, Payload = "created" }, x => x.Id, ct);
 await transaction.CommitAsync(ct);
 ```
 
-Choose a key convention shared by all cooperating callers. The lock can serialize work before a corresponding row exists. The supported overloads return `Task`:
+**SQL** (`$1 = "document:1"`):
 
-```csharp
-await db.Database.AcquireTransactionAdvisoryLockAsync("document:1", ct);
-await db.Database.AcquireTransactionAdvisoryLockAsync(123L, ct);
-await db.Database.AcquireTransactionAdvisoryLockAsync(7, 123, ct);
+```sql
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0));
 ```
 
-Each line above is an independent overload example to execute inside a caller-owned transaction. Text keys use `pg_advisory_xact_lock(hashtextextended(key, 0))` on PostgreSQL. Hashing can collide and shares the bigint key space with the `long` overload. PostgreSQL's two-int space is separate from its bigint space. Avoid assuming that text, bigint and two-int keys with similar spelling identify the same lock.
+Hashing happens on PostgreSQL with seed zero. It is not collision-free and shares the bigint key space with the `long` overload.
+
+<a id="advisory-bigint-api"></a>
+### Bigint key
+
+Use the `long` overload when your protocol already has a 64-bit lock key.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync(123L, ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL** (`$1 = 123`, type `bigint`):
+
+```sql
+SELECT pg_advisory_xact_lock($1);
+```
+
+<a id="advisory-pair-api"></a>
+### Two-int key
+
+Use the two-`int` overload for a pair of 32-bit keys, for example a category and an object key.
+
+**C#**
+
+```csharp
+await using var transaction = await db.Database.BeginTransactionAsync(ct);
+await db.Database.AcquireTransactionAdvisoryLockAsync(7, 123, ct);
+await transaction.CommitAsync(ct);
+```
+
+**SQL** (`$1 = 7`, `$2 = 123`, both type `integer`):
+
+```sql
+SELECT pg_advisory_xact_lock($1, $2);
+```
+
+PostgreSQL's two-int space is separate from its bigint space. Avoid assuming that text, bigint and two-int keys with similar spelling identify the same lock.
 
 These are blocking, transaction-scoped operations. Waiting can be canceled; PostgreSQL releases the lock at transaction completion. No session-scoped fallback, try-lock API, automatic retry or collision handling is provided.

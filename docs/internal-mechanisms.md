@@ -2,12 +2,33 @@
 
 This guide covers atomic insert-ignore, PostgreSQL wall-clock access and read-only transactions. These operations use the Npgsql-backed `DbContext` or its `Database` facade and can be used without `UsePostgreSqlExtensions()`. Snippets use the model from [Getting started](getting-started.md).
 
+| Method | Result |
+|---|---|
+| [InsertIgnoreAsync](#insert-api) | Whether one row was inserted |
+| [ReadClockTimestampAsync](#clock-api) | One server-clock value as UTC `DateTime` |
+| [MapClockTimestamp / ClockTimestamp](#clock-mapping-api) | A model mapping and a server-side clock expression |
+| [SetTransactionReadOnlyAsync](#read-only-api) | A read-only setting on the current transaction |
+
+SQL uses the example model and [reference versions](compatibility.md). `$1`, `$2` are PostgreSQL parameters; values are listed beside the examples. Transaction begin/commit are omitted from SQL listings. Parameter notation and generated aliases can vary with provider versions.
+
 <a id="insert-api"></a>
-## Insert a row and ignore one unique conflict
+## InsertIgnoreAsync
+
+Insert one mapped entity and ignore only a conflict on the unique key selected by the caller. This example uses `Document.Id` as that key.
+
+**C#**
 
 ```csharp
 var candidate = new Document { Id = 1, Payload = "created" };
 var inserted = await db.InsertIgnoreAsync(candidate, x => x.Id, ct);
+```
+
+**SQL** (`$1 = 1`, `$2 = "created"`):
+
+```sql
+INSERT INTO "Documents" ("Id", "Payload")
+VALUES ($1, $2)
+ON CONFLICT ("Id") DO NOTHING;
 ```
 
 The method sends one PostgreSQL `INSERT ... ON CONFLICT (...) DO NOTHING`. It returns `true` for one inserted row and `false` when the selected unique conflict prevented insertion. A conflicting row keeps its existing values. Violations of other constraints propagate as native PostgreSQL errors.
@@ -47,12 +68,20 @@ await transaction.CommitAsync(ct);
 ```
 
 <a id="clock-api"></a>
-## PostgreSQL wall-clock time
+## ReadClockTimestampAsync
 
 For one server value, use the typed database method:
 
+**C#**
+
 ```csharp
 DateTime sampledAt = await db.Database.ReadClockTimestampAsync(ct);
+```
+
+**SQL**
+
+```sql
+SELECT pg_catalog.clock_timestamp();
 ```
 
 It reads `pg_catalog.clock_timestamp()` once and returns a UTC `DateTime` at PostgreSQL's microsecond precision. It borrows an attached current transaction when present and can run standalone otherwise. It balances the connection ownership acquired by the call, preserving an already-open connection. Cancellation and provider errors propagate. No client clock is substituted.
@@ -60,7 +89,9 @@ It reads `pg_catalog.clock_timestamp()` once and returns a UTC `DateTime` at Pos
 Reuse the returned value explicitly when several application values need the same sample. A sample does not establish equivalence to a compound server-side lease predicate/update or define TTL, interval arithmetic or overflow policy.
 
 <a id="clock-mapping-api"></a>
-### Use the clock in a translated query
+## MapClockTimestamp and DatabaseClock.ClockTimestamp
+
+`MapClockTimestamp()` returns the same `ModelBuilder` and configures translation. This registration executes no SQL. `DatabaseClock.ClockTimestamp()` represents a `DateTime` expression to evaluate on PostgreSQL inside a translated query.
 
 Register the mapping in `OnModelCreating`:
 
@@ -70,18 +101,34 @@ modelBuilder.MapClockTimestamp();
 
 Then use it in a normal translated query, for example a projection over a populated table:
 
+**C#**
+
 ```csharp
 DateTime observedAt = await db.Documents
     .Select(x => DatabaseClock.ClockTimestamp())
     .FirstAsync(ct);
 ```
 
+**SQL**
+
+```sql
+SELECT pg_catalog.clock_timestamp()
+FROM "Documents" AS d
+LIMIT 1;
+```
+
+`FirstAsync` requires a row in `Documents`; an empty table produces its ordinary no-result error. For a clock sample independent of table contents, use [ReadClockTimestampAsync](#clock-api).
+
 `DatabaseClock.ClockTimestamp()` maps to PostgreSQL's volatile wall clock. Its value is taken when the function is evaluated. PostgreSQL `now()` instead represents transaction start time. Repeated calls can return different values inside one statement; the mapping does not promise a single shared evaluation. Direct invocation in client code throws `NotSupportedException`.
 
 This projection is an ordinary query without a row-lock marker. Row-lock projection restrictions still apply. Clock predicates/`ExecuteUpdate`, `DateTimeOffset` conversions, shared-sample server arithmetic, arbitrary CTE/update compositions and overflow equivalence are outside the verified usage described here.
 
 <a id="read-only-api"></a>
-## Read-only transactions
+## SetTransactionReadOnlyAsync
+
+Mark the current explicit transaction read-only. The method returns `Task`; PostgreSQL enforces the transaction setting.
+
+**C#**
 
 ```csharp
 await using var transaction = await db.Database.BeginTransactionAsync(ct);
@@ -89,6 +136,14 @@ await db.Database.SetTransactionReadOnlyAsync(ct);
 var documents = await db.Documents.AsNoTracking().ToListAsync(ct);
 await transaction.CommitAsync(ct);
 ```
+
+**SQL command sent by the helper**
+
+```sql
+SET TRANSACTION READ ONLY;
+```
+
+The subsequent `ToListAsync` is an ordinary EF query and generates its own SELECT over `Documents`.
 
 Call the method immediately after beginning the transaction, before queries that constrain PostgreSQL's transaction settings. It issues `SET TRANSACTION READ ONLY` under the attached current EF transaction. PostgreSQL enforces valid timing and write restrictions. The method changes no session default or isolation level and cannot repair an aborted transaction.
 

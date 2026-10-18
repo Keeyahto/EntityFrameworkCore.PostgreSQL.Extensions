@@ -20,6 +20,8 @@ Current documentation lives in the following places:
 
 Group related capabilities into existing guides. Add a page only when a topic needs independent navigation and has enough coherent content. Keep each contract in one owning section; link to it from other pages. Read the whole affected section before and after editing. Remove replaced explanations and reconcile definitions, exceptions and neighboring examples.
 
+Within a capability guide, organize public APIs by method or related overloads: method name and purpose → arguments/return value → C# usage → corresponding SQL → method-specific behavior and limitations. Keep shared grammar, concurrency, configuration and troubleshooting sections after the relevant method entries. Provide a short method index on longer pages. Configuration methods that execute no SQL must say so. Verify SQL against generated/executed commands, identify the example model and parameter values, and disclose omitted protocol comments or formatting. Preserve terminal-specific SQL such as Single's LIMIT 2; SQL examples do not broaden the supported query grammar. Maintain this structure in both languages without creating a separate page per method.
+
 ## English and Russian
 
 Maintain matching paths and explicit heading IDs in `docs/` and `docs/ru/`. English is the default locale; Russian is a complete user-facing counterpart. Update both languages in the same change. Preserve identical API names, code, dependency versions, preconditions, exceptions and support limits. Translate explanation naturally; do not mix editorial languages inside a page. Maintainer instructions under `.agents/` and repository policies may remain English.

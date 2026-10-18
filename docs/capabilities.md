@@ -3,14 +3,18 @@
 Configure each `DbContext` with the Npgsql EF Core provider. The library uses one namespace, `EntityFrameworkCore.PostgreSQL.Extensions`. This guide explains registration, database requirement checks and common failure causes.
 
 <a id="registration-api"></a>
-## Register the operations you use
+## UsePostgreSqlExtensions
 
 For row-lock queries:
+
+**C#**
 
 ```csharp
 options.UseNpgsql(connectionString,
     npgsql => npgsql.UsePostgreSqlExtensions());
 ```
+
+**SQL:** none. This method configures the context's query services; SQL is generated when a marked query executes. For complete C#/SQL pairs, see [ForUpdate](query-integration.md#for-update-api), [ForShare](query-integration.md#for-share-api) and [WithRowLock](query-integration.md#with-row-lock-api).
 
 `UsePostgreSqlExtensions(this NpgsqlDbContextOptionsBuilder)` returns the same builder. Registration is parameterless and idempotent. Use it in the Npgsql options callback for `AddDbContext`, `AddDbContextFactory` or pooled-context registration as appropriate to your application. Options and query state remain isolated across contexts and pools.
 
@@ -26,13 +30,27 @@ Npgsql's effective SQL-generation target controls translation. The server versio
 The library does not automatically change the SQL target when it connects, install extensions or probe on each query. An application decides which databases, roles and failover targets need checking and when it is safe to begin work.
 
 <a id="probe-api"></a>
-## Inspect database requirements
+## PostgreSqlCapabilityProbe.CheckAsync
+
+Read database facts and compare the requirements supplied by the caller. The method returns `Task<PostgreSqlCapabilityReport>` and performs a read-only catalog query.
+
+**C#**
 
 ```csharp
 var report = await PostgreSqlCapabilityProbe.CheckAsync(
     db, Array.Empty<PostgreSqlExtensionRequirement>(), ct);
 Console.WriteLine(report.Outcome);
 ```
+
+**SQL**
+
+```sql
+SELECT extname, extversion
+FROM pg_catalog.pg_extension
+ORDER BY extname;
+```
+
+The SQL-generation target is read from Npgsql options, and the actual server version from the connection. These values require no extra version SELECT. Requirements are compared with the returned catalog inventory in the library; the SQL above does not install extensions or filter by the supplied requirements.
 
 An empty requirements list checks the provider/target/server relationship and reports the installed extension inventory. If your application requires an extension, supply it explicitly:
 

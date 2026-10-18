@@ -3,14 +3,18 @@
 Настройте каждый `DbContext` с EF-провайдером Npgsql. Библиотека использует одно пространство имён — `EntityFrameworkCore.PostgreSQL.Extensions`. Здесь описаны регистрация, проверка требований к базе и типичные причины отказов.
 
 <a id="registration-api"></a>
-## Зарегистрируйте нужные операции
+## UsePostgreSqlExtensions
 
 Для запросов с блокировкой строк:
+
+**C#**
 
 ```csharp
 options.UseNpgsql(connectionString,
     npgsql => npgsql.UsePostgreSqlExtensions());
 ```
+
+**SQL:** не выполняется. Метод настраивает сервисы запросов контекста; SQL генерируется при выполнении запроса с маркером. Полные пары C#/SQL приведены для [ForUpdate](query-integration.md#for-update-api), [ForShare](query-integration.md#for-share-api) и [WithRowLock](query-integration.md#with-row-lock-api).
 
 `UsePostgreSqlExtensions(this NpgsqlDbContextOptionsBuilder)` возвращает тот же builder. Регистрация без параметров и идемпотентна. Вызывайте её в callback настроек Npgsql для `AddDbContext`, `AddDbContextFactory` или регистрации пула контекстов, в зависимости от приложения. Настройки и состояние запросов изолированы между контекстами и пулами.
 
@@ -26,13 +30,27 @@ Advisory-блокировки, вставка с пропуском конфли
 Библиотека не меняет SQL target автоматически при подключении, не устанавливает расширения и не проверяет базу перед каждым запросом. Приложение определяет, какие базы, роли и резервные серверы нужно проверять и когда можно начинать работу.
 
 <a id="probe-api"></a>
-## Проверьте требования к базе
+## PostgreSqlCapabilityProbe.CheckAsync
+
+Читает факты о базе и сравнивает их с требованиями вызывающего кода. Возвращает `Task<PostgreSqlCapabilityReport>` и выполняет запрос к каталогу только для чтения.
+
+**C#**
 
 ```csharp
 var report = await PostgreSqlCapabilityProbe.CheckAsync(
     db, Array.Empty<PostgreSqlExtensionRequirement>(), ct);
 Console.WriteLine(report.Outcome);
 ```
+
+**SQL**
+
+```sql
+SELECT extname, extversion
+FROM pg_catalog.pg_extension
+ORDER BY extname;
+```
+
+Целевая версия SQL читается из настроек Npgsql, а фактическая версия сервера — из соединения. Дополнительный SELECT версии для этих значений не нужен. Библиотека сравнивает требования с полученным перечнем расширений; SQL выше не устанавливает расширения и не фильтрует результат по переданным требованиям.
 
 Пустой список требований проверяет соотношение провайдера, SQL target и сервера, а также возвращает перечень установленных расширений. Если приложению необходимо расширение, укажите его явно:
 
