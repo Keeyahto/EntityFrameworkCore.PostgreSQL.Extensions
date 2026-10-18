@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
+using NpgsqlTypes;
 using Xunit;
 
 namespace EntityFrameworkCore.PostgreSQL.Extensions.Tests.Mechanisms;
@@ -51,6 +52,29 @@ public sealed class DatabaseClockFeatureTests(PostgreSqlFixture fixture)
         var maximumWholeMilliseconds = TimeSpan.FromTicks(ticks);
 
         Assert.Null(await context.Database.ReadClockExpiryAsync(maximumWholeMilliseconds));
+    }
+
+    [Fact]
+    public async Task ReadClockExpiryFollowsPostgreSqlIntervalRoundingForVeryLargeWholeMillisecondDurations()
+    {
+        await using var context = CreateClockContext();
+        var duration = TimeSpan.FromTicks(1_000_000_000_000_010_000L);
+
+        var result = await context.Database.ReadClockExpiryAsync(duration);
+
+        Assert.NotNull(result);
+        Assert.Equal(TimeSpan.Zero, result.Value.SampledAt.Offset);
+        Assert.Equal(TimeSpan.Zero, result.Value.ExpiresAt.Offset);
+        Assert.Equal(0, result.Value.SampledAt.Ticks % 10);
+        Assert.Equal(0, result.Value.ExpiresAt.Ticks % 10);
+
+        var nativeExpiry = await ReadNativeIntervalExpiryAsync(
+            context,
+            result.Value.SampledAt,
+            duration.Ticks / TimeSpan.TicksPerMillisecond);
+
+        Assert.Equal(nativeExpiry, result.Value.ExpiresAt);
+        Assert.Equal(TimeSpan.FromTicks(duration.Ticks - 80), result.Value.ExpiresAt - result.Value.SampledAt);
     }
 
     [Theory]
@@ -213,6 +237,37 @@ public sealed class DatabaseClockFeatureTests(PostgreSqlFixture fixture)
                 "NullableExpiresAt" timestamp with time zone NULL
             )
             """);
+    }
+
+    private static async Task<DateTimeOffset> ReadNativeIntervalExpiryAsync(
+        ClockFeatureContext context,
+        DateTimeOffset sampledAt,
+        long durationMilliseconds)
+    {
+        var database = context.Database;
+        var connection = (NpgsqlConnection)database.GetDbConnection();
+        await database.OpenConnectionAsync();
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT @sampled_at + @duration_milliseconds * INTERVAL '1 millisecond'";
+            command.Parameters.Add(new NpgsqlParameter("sampled_at", NpgsqlDbType.TimestampTz)
+            {
+                Value = sampledAt
+            });
+            command.Parameters.Add(new NpgsqlParameter("duration_milliseconds", NpgsqlDbType.Bigint)
+            {
+                Value = durationMilliseconds
+            });
+
+            await using var reader = await command.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return await reader.GetFieldValueAsync<DateTimeOffset>(0);
+        }
+        finally
+        {
+            await database.CloseConnectionAsync();
+        }
     }
 
     private static ILoggerFactory CreateLoggerFactory(ILoggerProvider provider)

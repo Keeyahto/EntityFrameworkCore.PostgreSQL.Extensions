@@ -105,6 +105,8 @@ if (expiry is { } times)
 
 Both values have zero UTC offset and PostgreSQL microsecond precision. The calculation uses one `pg_catalog.clock_timestamp()` sample and `duration_milliseconds * interval '1 millisecond'` with a parameterized `long` duration. An expiry beyond `9999-12-31 23:59:59.999999+00` returns `null`; no expiry is clamped and no client-clock value is substituted. The upper bound is a SQL timestamp literal so provider infinity conversions cannot alter it. Application TTL limits and lease policy belong to the caller.
 
+Interval multiplication follows PostgreSQL's native floating-point arithmetic. Very large accepted durations can round by several microseconds: `100000000000001` milliseconds produces an interval eight microseconds shorter on the reference PostgreSQL 16 combination. The method preserves that server result; it does not promise equivalence to exact .NET `TimeSpan` addition over the entire accepted duration range.
+
 **SQL** (`$1 = 2592000000`, type `bigint`, for 30 days; no entity model is involved):
 
 ```sql

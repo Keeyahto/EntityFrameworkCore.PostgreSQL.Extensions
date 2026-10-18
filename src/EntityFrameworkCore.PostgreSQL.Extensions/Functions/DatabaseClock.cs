@@ -95,6 +95,7 @@ public static class PostgreSqlClockDatabaseExtensions
     }
 
     /// <summary>Reads one PostgreSQL wall-clock sample and computes its expiry in the same statement.</summary>
+    /// <remarks>PostgreSQL interval multiplication may round very large durations at microsecond precision; the result is not guaranteed to equal exact .NET <see cref="TimeSpan"/> addition.</remarks>
     /// <param name="database">The Npgsql-backed database facade.</param>
     /// <param name="duration">A positive duration containing a whole number of milliseconds.</param>
     /// <param name="cancellationToken">The operation cancellation token.</param>
